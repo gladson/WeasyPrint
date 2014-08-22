@@ -5,24 +5,30 @@
 
     Various utility functions and classes.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
 
 from __future__ import division, unicode_literals
 
+import io
 import re
 import sys
 import codecs
 import os.path
 import mimetypes
+import contextlib
+import gzip
+import zlib
+import traceback
 
 from . import VERSION_STRING
 from .logger import LOGGER
 from .compat import (
-    urljoin, urlsplit, quote, unquote, unquote_to_bytes, urlopen_contenttype,
-    Request, parse_email, pathname2url, unicode, base64_decode)
+    urljoin, urlsplit, quote, unquote, unquote_to_bytes, urlopen,
+    urllib_get_content_type, urllib_get_charset, urllib_get_filename, Request,
+    parse_email, pathname2url, unicode, base64_decode, StreamingGzipFile)
 
 
 # Unlinke HTML, CSS and PNG, the SVG MIME type is not always builtin
@@ -45,8 +51,9 @@ except LookupError:
 
 # See http://stackoverflow.com/a/11687993/1162888
 # Both are needed in Python 3 as the re module does not like to mix
-UNICODE_SCHEME_RE = re.compile('^([a-z][a-z0-1.+-]+):', re.I)
-BYTES_SCHEME_RE = re.compile(b'^([a-z][a-z0-1.+-]+):', re.I)
+# http://tools.ietf.org/html/rfc3986#section-3.1
+UNICODE_SCHEME_RE = re.compile('^([a-zA-Z][a-zA-Z0-9.+-]+):')
+BYTES_SCHEME_RE = re.compile(b'^([a-zA-Z][a-zA-Z0-9.+-]+):')
 
 
 def iri_to_uri(url):
@@ -130,8 +137,8 @@ def url_join(base_url, url, context, *args):
     elif base_url:
         return iri_to_uri(urljoin(base_url, url))
     else:
-        LOGGER.warn('Relative URI reference without a base URI: ' + context,
-                    *args)
+        LOGGER.warning('Relative URI reference without a base URI: ' + context,
+                       *args)
         return None
 
 
@@ -141,19 +148,18 @@ def get_link_attribute(element, attr_name):
 
     """
     attr_value = element.get(attr_name, '').strip()
-    if attr_value.startswith('#'):
+    if attr_value.startswith('#') and len(attr_value) > 1:
         # Do not require a base_url when the value is just a fragment.
         return 'internal', unquote(attr_value[1:])
-    else:
-        uri = get_url_attribute(element, attr_name)
+    uri = get_url_attribute(element, attr_name)
+    if uri:
         document_url = element_base_url(element)
-        if uri and document_url:
+        if document_url:
             parsed = urlsplit(uri)
             # Compare with fragments removed
             if parsed[:-1] == urlsplit(document_url)[:-1]:
                 return 'internal', unquote(parsed.fragment)
-            else:
-                return 'external', uri
+        return 'external', uri
 
 
 def ensure_url(string):
@@ -226,6 +232,12 @@ def open_data_url(url):
                 redirected_url=url)
 
 
+HTTP_HEADERS = {
+    'User-Agent': VERSION_STRING,
+    'Accept-Encoding': 'gzip, deflate',
+}
+
+
 def default_url_fetcher(url):
     """Fetch an external resource such as an image or stylesheet.
 
@@ -249,40 +261,70 @@ def default_url_fetcher(url):
           *charset* parameter in a *Content-Type* header
         * Optionally: ``redirected_url``, the actual URL of the ressource
           in case there were eg. HTTP redirects.
+        * Optionally: ``filename``, the filename of the resource. Usually
+          derived from the *filename* parameter in a *Content-Disposition*
+          header
 
         If a ``file_obj`` key is given, it is the caller’s responsability
         to call ``file_obj.close()``.
 
     """
-    if url.startswith('data:'):
+    if url.lower().startswith('data:'):
         return open_data_url(url)
     elif UNICODE_SCHEME_RE.match(url):
         url = iri_to_uri(url)
-        result, mime_type, charset = urlopen_contenttype(Request(
-            url, headers={'User-Agent': VERSION_STRING}))
-        return dict(file_obj=result, redirected_url=result.geturl(),
-                    mime_type=mime_type, encoding=charset)
+        response = urlopen(Request(url, headers=HTTP_HEADERS))
+        result = dict(redirected_url=response.geturl(),
+                      mime_type=urllib_get_content_type(response),
+                      encoding=urllib_get_charset(response),
+                      filename=urllib_get_filename(response))
+        content_encoding = response.info().get('Content-Encoding')
+        if content_encoding == 'gzip':
+            if StreamingGzipFile is None:
+                result['string'] = gzip.GzipFile(
+                    fileobj=io.BytesIO(response.read())).read()
+                response.close()
+            else:
+                result['file_obj'] = StreamingGzipFile(fileobj=response)
+        elif content_encoding == 'deflate':
+            data = response.read()
+            try:
+                result['string'] = zlib.decompress(data)
+            except zlib.error:
+                # Try without zlib header or checksum
+                result['string'] = zlib.decompress(data, -15)
+        else:
+            result['file_obj'] = response
+        return result
     else:
         raise ValueError('Not an absolute URI: %r' % url)
 
 
-def wrap_url_fetcher(url_fetcher):
-    """Decorate an url_fetcher to fill in optional data.
+class URLFetchingError(IOError):
+    """Some error happened when fetching an URL."""
 
-    url_fetcher itself can be None, in which case the default fetcher is used.
-    In a result dict, redirected_url defaults to the original URL. If not
-    provided, mime_type is guessed from the path extension in the URL.
 
-    """
-    if url_fetcher is None:
-        return default_url_fetcher
-
-    def wrapped_fetcher(url):
+@contextlib.contextmanager
+def fetch(url_fetcher, url):
+    """Call an url_fetcher, fill in optional data, and clean up."""
+    try:
         result = url_fetcher(url)
-        result.setdefault('redirected_url', url)
-        if 'mime_type' not in result:
-            path = urlsplit(result['redirected_url']).path
-            mime_type, _ = mimetypes.guess_type(path)
-            result['mime_type'] = mime_type or 'application/octet-stream'
-        return result
-    return wrapped_fetcher
+    except Exception as exc:
+        name = type(exc).__name__
+        value = str(exc)
+        raise URLFetchingError('%s: %s' % (name, value) if value else name)
+    result.setdefault('redirected_url', url)
+    result.setdefault('mime_type', None)
+    if 'file_obj' in result:
+        try:
+            yield result
+        finally:
+            try:
+                result['file_obj'].close()
+            except Exception:
+                # May already be closed or something.
+                # This is just cleanup anyway: log but make it non-fatal.
+                LOGGER.warning('Error when closing stream for %s:\n%s',
+                               url, traceback.format_exc())
+    else:
+        yield result

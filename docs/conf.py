@@ -42,7 +42,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'WeasyPrint'
-copyright = u'2012, Simon Sapin and contributors, see AUTHORs'
+copyright = u'2011-2014, Simon Sapin and contributors, see AUTHORs'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -251,6 +251,7 @@ texinfo_documents = [
 
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {
-    'http://docs.python.org/': None,
-    'http://www.cairographics.org/documentation/pycairo/2/': None,
+    'python': ('http://docs.python.org/', None),
+    'pycairo': ('http://www.cairographics.org/documentation/pycairo/2/', None),
+    'cairocffi': ('http://pythonhosted.org/cairocffi/', None),
 }

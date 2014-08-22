@@ -5,7 +5,7 @@
 
     Test the public API.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -18,8 +18,8 @@ import sys
 import math
 import contextlib
 import threading
-import shutil
-import tempfile
+import gzip
+import zlib
 
 import lxml.html
 import lxml.etree
@@ -27,7 +27,8 @@ import cairocffi as cairo
 import pytest
 
 from .testing_utils import (
-    resource_filename, assert_no_logs, capture_logs, TestHTML)
+    resource_filename, assert_no_logs, capture_logs, TestHTML,
+    http_server, temp_directory)
 from .test_draw import image_to_pixels
 from ..compat import urljoin, urlencode, urlparse_uses_relative, iteritems
 from ..urls import path2url
@@ -50,20 +51,6 @@ def chdir(path):
             yield
         finally:
             os.chdir(old_dir)
-
-
-@contextlib.contextmanager
-def temp_directory():
-    """Context manager that gives the path to a new temporary directory.
-
-    Remove everything on exiting the context.
-
-    """
-    directory = tempfile.mkdtemp()
-    try:
-        yield directory
-    finally:
-        shutil.rmtree(directory)
 
 
 def read_file(filename):
@@ -346,7 +333,7 @@ def test_command_line_render():
             write_file('no_css.html', html)
             write_file('combined.html', combined)
             write_file('combined-UTF-16BE.html',
-                combined.decode('ascii').encode('UTF-16BE'))
+                       combined.decode('ascii').encode('UTF-16BE'))
             write_file('linked.html', linked)
             write_file('style.css', css)
 
@@ -407,7 +394,7 @@ def test_command_line_render():
             with capture_logs() as logs:
                 stdout = run('--format png - -', stdin=combined)
             assert len(logs) == 1
-            assert logs[0].startswith('WARNING: Error for image')
+            assert logs[0].startswith('WARNING: Failed to load image')
             assert stdout == empty_png_bytes
 
             stdout = run('--format png --base-url .. - -', stdin=combined)
@@ -744,92 +731,92 @@ def test_links():
         [('internal', (0, 0, 200), (0, 0, 200, 30))],
     ])
 
-    assert_links('''
-        <body style="width: 200px">
-        <a href="../lipsum/é_%E9" style="display: block; margin: 10px 5px">
-    ''', [[
-        ('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
-            (5, 10, 190, 0)),
-    ]], [{}], [[
-        ('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
-            (5, 10, 190, 0)),
-    ]],
-    base_url='http://weasyprint.org/foo/bar/')
-    assert_links('''
-        <body style="width: 200px">
-        <div style="display: block; margin: 10px 5px;
-                    -weasy-link: url(../lipsum/é_%E9)">
-    ''', [[
-        ('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
-            (5, 10, 190, 0)),
-    ]], [{}], [[
-        ('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
-            (5, 10, 190, 0)),
-    ]],
-    base_url='http://weasyprint.org/foo/bar/')
+    assert_links(
+        '''
+            <body style="width: 200px">
+            <a href="../lipsum/é_%E9" style="display: block; margin: 10px 5px">
+        ''', [[('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
+                (5, 10, 190, 0))]],
+        [{}], [[('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
+                 (5, 10, 190, 0))]],
+        base_url='http://weasyprint.org/foo/bar/')
+    assert_links(
+        '''
+            <body style="width: 200px">
+            <div style="display: block; margin: 10px 5px;
+                        -weasy-link: url(../lipsum/é_%E9)">
+        ''', [[('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
+                (5, 10, 190, 0))]],
+        [{}], [[('external', 'http://weasyprint.org/foo/lipsum/%C3%A9_%E9',
+                 (5, 10, 190, 0))]],
+        base_url='http://weasyprint.org/foo/bar/')
 
     # Relative URI reference without a base URI: not allowed
-    assert_links('<a href="../lipsum">',
+    assert_links(
+        '<a href="../lipsum">',
         [[]], [{}], [[]], base_url=None, warnings=[
             'WARNING: Relative URI reference without a base URI'])
-    assert_links('<div style="-weasy-link: url(../lipsum)">',
+    assert_links(
+        '<div style="-weasy-link: url(../lipsum)">',
         [[]], [{}], [[]], base_url=None, warnings=[
             "WARNING: Ignored `-weasy-link: url(../lipsum)` at 1:1, "
             "Relative URI reference without a base URI: '../lipsum'."])
 
-    # Internal URI reference without a base URI: OK
-    assert_links('''
-        <body style="width: 200px">
-        <a href="#lipsum" id="lipsum" style="display: block; margin: 10px 5px">
-    ''', [[
-        ('internal', 'lipsum', (5, 10, 190, 0)),
-    ]], [
-        {'lipsum': (5, 10)}
-    ], [[
-        ('internal', (0, 5, 10), (5, 10, 190, 0)),
-    ]], base_url=None)
+    # Internal or absolute URI reference without a base URI: OK
+    assert_links(
+        '''
+            <body style="width: 200px">
+            <a href="#lipsum" id="lipsum"
+                style="display: block; margin: 10px 5px"></a>
+            <a href="http://weasyprint.org/" style="display: block"></a>
+        ''', [[('internal', 'lipsum', (5, 10, 190, 0)),
+               ('external', 'http://weasyprint.org/', (0, 10, 200, 0))]],
+        [{'lipsum': (5, 10)}],
+        [[('internal', (0, 5, 10), (5, 10, 190, 0)),
+          ('external', 'http://weasyprint.org/', (0, 10, 200, 0))]],
+        base_url=None)
 
-    assert_links('''
-        <body style="width: 200px">
-        <div style="-weasy-link: url(#lipsum); margin: 10px 5px" id="lipsum">
-    ''', [[
-        ('internal', 'lipsum', (5, 10, 190, 0)),
-    ]], [
-        {'lipsum': (5, 10)}
-    ], [[
-        ('internal', (0, 5, 10), (5, 10, 190, 0)),
-    ]], base_url=None)
+    assert_links(
+        '''
+            <body style="width: 200px">
+            <div style="-weasy-link: url(#lipsum);
+                        margin: 10px 5px" id="lipsum">
+        ''',
+        [[('internal', 'lipsum', (5, 10, 190, 0))]],
+        [{'lipsum': (5, 10)}],
+        [[('internal', (0, 5, 10), (5, 10, 190, 0))]],
+        base_url=None)
 
-    assert_links('''
-        <style> a { display: block; height: 15px } </style>
-        <body style="width: 200px">
-            <a href="#lipsum"></a>
-            <a href="#missing" id="lipsum"></a>
-    ''', [[
-        ('internal', 'lipsum', (0, 0, 200, 15)),
-        ('internal', 'missing', (0, 15, 200, 15)),
-    ]], [
-        {'lipsum': (0, 15)}
-    ], [[
-        ('internal', (0, 0, 15), (0, 0, 200, 15)),
-    ]], base_url=None, warnings=[
-        'WARNING: No anchor #missing for internal URI reference'])
+    assert_links(
+        '''
+            <style> a { display: block; height: 15px } </style>
+            <body style="width: 200px">
+                <a href="#lipsum"></a>
+                <a href="#missing" id="lipsum"></a>
+        ''',
+        [[('internal', 'lipsum', (0, 0, 200, 15)),
+          ('internal', 'missing', (0, 15, 200, 15))]],
+        [{'lipsum': (0, 15)}],
+        [[('internal', (0, 0, 15), (0, 0, 200, 15))]],
+        base_url=None,
+        warnings=[
+            'WARNING: No anchor #missing for internal URI reference'])
 
-    assert_links('''
-        <body style="width: 100px; transform: translateY(100px)">
-        <a href="#lipsum" id="lipsum" style="display: block; height: 20px;
-            transform: rotate(90deg) scale(2)">
-    ''', [[
-        ('internal', 'lipsum', (30, 10, 40, 200)),
-    ]], [
-        {'lipsum': (70, 10)}
-    ], [[
-        ('internal', (0, 70, 10), (30, 10, 40, 200)),
-    ]], round=True)
+    assert_links(
+        '''
+            <body style="width: 100px; transform: translateY(100px)">
+            <a href="#lipsum" id="lipsum" style="display: block; height: 20px;
+                transform: rotate(90deg) scale(2)">
+        ''',
+        [[('internal', 'lipsum', (30, 10, 40, 200))]],
+        [{'lipsum': (70, 10)}],
+        [[('internal', (0, 70, 10), (30, 10, 40, 200))]],
+        round=True)
 
 
 def wsgi_client(path_info, qs_args=None):
     start_response_calls = []
+
     def start_response(status, headers):
         start_response_calls.append((status, headers))
     environ = {'PATH_INFO': path_info,
@@ -893,14 +880,17 @@ def test_navigator():
 # Make relative URL references work with our custom URL scheme.
 urlparse_uses_relative.append('weasyprint-custom')
 
+
 @assert_no_logs
 def test_url_fetcher():
     pattern_png = read_file(resource_filename('pattern.png'))
+
     def fetcher(url):
-        if url == 'weasyprint-custom:foo/pattern':
+        if url == 'weasyprint-custom:foo/%C3%A9_%e9_pattern':
             return dict(string=pattern_png, mime_type='image/png')
         elif url == 'weasyprint-custom:foo/bar.css':
-            return dict(string='body { background: url(pattern)')
+            return dict(string='body { background: url(é_%e9_pattern)',
+                        mime_type='text/css')
         else:
             return default_url_fetcher(url)
 
@@ -909,25 +899,113 @@ def test_url_fetcher():
         @page { size: 8px; margin: 2px; background: #fff }
         body { margin: 0; font-size: 0 }
     ''', base_url=base_url)
+
     def test(html, blank=False):
         html = TestHTML(string=html, url_fetcher=fetcher, base_url=base_url)
         check_png_pattern(html.write_png(stylesheets=[css]), blank=blank)
 
     test('<body><img src="pattern.png">')  # Test a "normal" URL
-    test('<body><img src="weasyprint-custom:foo/pattern">')
-    test('<body style="background: url(weasyprint-custom:foo/pattern)">')
+    test('<body><img src="weasyprint-custom:foo/é_%e9_pattern">')
+    test('<body style="background: url(weasyprint-custom:foo/é_%e9_pattern)">')
     test('<body><li style="list-style: inside '
-            'url(weasyprint-custom:foo/pattern)">')
+         'url(weasyprint-custom:foo/é_%e9_pattern)">')
     test('<link rel=stylesheet href="weasyprint-custom:foo/bar.css"><body>')
     test('<style>@import "weasyprint-custom:foo/bar.css";</style><body>')
 
     with capture_logs() as logs:
         test('<body><img src="custom:foo/bar">', blank=True)
     assert len(logs) == 1
-    assert logs[0].startswith('WARNING: Error for image at custom:foo/bar')
+    assert logs[0].startswith(
+        'WARNING: Failed to load image at custom:foo/bar')
 
-    def fetcher(url):
+    def fetcher_2(url):
         assert url == 'weasyprint-custom:%C3%A9_%e9.css'
-        return dict(string='')
+        return dict(string='', mime_type='text/css')
     TestHTML(string='<link rel=stylesheet href="weasyprint-custom:'
-        'é_%e9.css"><body>', url_fetcher=fetcher).render()
+                    'é_%e9.css"><body>', url_fetcher=fetcher_2).render()
+
+
+@assert_no_logs
+def test_html_meta():
+    def assert_meta(html, **meta):
+        meta.setdefault('title', None)
+        meta.setdefault('authors', [])
+        meta.setdefault('keywords', [])
+        meta.setdefault('generator', None)
+        meta.setdefault('description', None)
+        meta.setdefault('created', None)
+        meta.setdefault('modified', None)
+        meta.setdefault('attachments', [])
+        assert vars(TestHTML(string=html).render().metadata) == meta
+
+    assert_meta('<body>')
+    assert_meta(
+        '''
+            <meta name=author content="I Me &amp; Myself">
+            <meta name=author content="Smith, John">
+            <title>Test document</title>
+            <h1>Another title</h1>
+            <meta name=generator content="Human after all">
+            <meta name=dummy content=ignored>
+            <meta name=dummy>
+            <meta content=ignored>
+            <meta>
+            <meta name=keywords content="html ,	css,
+                                         pdf,css">
+            <meta name=dcterms.created content=2011-04>
+            <meta name=dcterms.created content=2011-05>
+            <meta name=dcterms.modified content=2013>
+            <meta name=keywords content="Python; cairo">
+            <meta name=description content="Blah… ">
+        ''',
+        authors=['I Me & Myself', 'Smith, John'],
+        title='Test document',
+        generator='Human after all',
+        keywords=['html', 'css', 'pdf', 'Python; cairo'],
+        description="Blah… ",
+        created='2011-04',
+        modified='2013')
+    assert_meta(
+        '''
+            <title>One</title>
+            <meta name=Author>
+            <title>Two</title>
+            <title>Three</title>
+            <meta name=author content=Me>
+        ''',
+        title='One',
+        authors=['', 'Me'])
+
+
+@assert_no_logs
+def test_http():
+    def gzip_compress(data):
+        file_obj = io.BytesIO()
+        gzip_file = gzip.GzipFile(fileobj=file_obj, mode='wb')
+        gzip_file.write(data)
+        gzip_file.close()
+        return file_obj.getvalue()
+
+    with http_server({
+        '/gzip': lambda env: (
+            (gzip_compress(b'<html test=ok>'), [('Content-Encoding', 'gzip')])
+            if 'gzip' in env.get('HTTP_ACCEPT_ENCODING', '') else
+            (b'<html test=accept-encoding-header-fail>', [])
+        ),
+        '/deflate': lambda env: (
+            (zlib.compress(b'<html test=ok>'),
+             [('Content-Encoding', 'deflate')])
+            if 'deflate' in env.get('HTTP_ACCEPT_ENCODING', '') else
+            (b'<html test=accept-encoding-header-fail>', [])
+        ),
+        '/raw-deflate': lambda env: (
+            # Remove zlib header and checksum
+            (zlib.compress(b'<html test=ok>')[2:-4],
+             [('Content-Encoding', 'deflate')])
+            if 'deflate' in env.get('HTTP_ACCEPT_ENCODING', '') else
+            (b'<html test=accept-encoding-header-fail>', [])
+        ),
+    }) as root_url:
+        assert HTML(root_url + '/gzip').root_element.get('test') == 'ok'
+        assert HTML(root_url + '/deflate').root_element.get('test') == 'ok'
+        assert HTML(root_url + '/raw-deflate').root_element.get('test') == 'ok'

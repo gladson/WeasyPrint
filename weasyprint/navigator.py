@@ -5,7 +5,7 @@
 
     A WeasyPrint-based web browser. In your web browser.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -129,11 +129,12 @@ def app(environ, start_response):
         with open(FAVICON, 'rb') as fd:
             return make_response(fd.read(), content_type='image/x-icon')
 
-    elif path.startswith('/pdf/') and len(path) > 5: # len('/pdf/') == 5
+    elif path.startswith('/pdf/') and len(path) > 5:  # len('/pdf/') == 5
         url = normalize_url(path[5:], environ.get('QUERY_STRING'))
         body = HTML(url=url).write_pdf(stylesheets=[STYLESHEET])
         filename = url.rstrip('/').rsplit('/', 1)[-1] or 'out'
-        return make_response(body, content_type='application/pdf',
+        return make_response(
+            body, content_type='application/pdf',
             headers=[('Content-Disposition',
                       'attachement; filename=%s.pdf' % filename)])
 

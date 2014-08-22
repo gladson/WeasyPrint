@@ -5,7 +5,7 @@
 
     Test the text layout.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -89,8 +89,34 @@ def test_text_font_size_zero():
         <p>test font size zero</p>
     ''')
     paragraph, = body_children(page)
-    # zero-sized text boxes are removed
     line, = paragraph.children
+    # zero-sized text boxes are removed
     assert not line.children
     assert line.height == 0
     assert paragraph.height == 0
+
+
+@assert_no_logs
+def test_text_spaced_inlines():
+    """Test a text with inlines separated by a space."""
+    page, = parse('''
+        <p>start <i><b>bi1</b> <b>bi2</b></i> <b>b1</b> end</p>
+    ''')
+    paragraph, = body_children(page)
+    line, = paragraph.children
+    start, i, space, b, end = line.children
+    assert start.text == 'start '
+    assert space.text == ' '
+    assert space.width > 0
+    assert end.text == ' end'
+
+    bi1, space, bi2 = i.children
+    bi1, = bi1.children
+    bi2, = bi2.children
+    assert bi1.text == 'bi1'
+    assert space.text == ' '
+    assert space.width > 0
+    assert bi2.text == 'bi2'
+
+    b1, = b.children
+    assert b1.text == 'b1'

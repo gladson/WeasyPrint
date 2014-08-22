@@ -5,7 +5,7 @@
 
     Command-line interface to WeasyPrint.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -61,6 +61,11 @@ def main(argv=None, stdout=None, stdin=None):
 
         Set the media type to use for ``@media``. Defaults to ``print``.
 
+    .. option:: -a <file>, --attachment <file>
+
+        Adds an attachment to the document which is included in the PDF output.
+        This option can be added multiple times to attach more files.
+
     .. option:: --version
 
         Show the version number. Other options and arguments are ignored.
@@ -70,11 +75,11 @@ def main(argv=None, stdout=None, stdin=None):
         Show the command-line usage. Other options and arguments are ignored.
 
     """
-    parser = argparse.ArgumentParser(prog='weasyprint',
-        description='Renders web pages to PDF or PNG.')
+    parser = argparse.ArgumentParser(
+        prog='weasyprint', description='Renders web pages to PDF or PNG.')
     parser.add_argument('--version', action='version',
                         version='WeasyPrint version %s' % VERSION,
-                        help='Print WeasyPrint’s version number and exit.')
+                        help="Print WeasyPrint's version number and exit.")
     parser.add_argument('-e', '--encoding',
                         help='Character encoding of the input')
     parser.add_argument('-f', '--format', choices=['pdf', 'png'],
@@ -92,10 +97,13 @@ def main(argv=None, stdout=None, stdin=None):
                         help='Base for relative URLs in the HTML input. '
                              "Defaults to the input's own filename or URL "
                              'or the current directory for stdin.')
-    parser.add_argument('input',
-        help='URL or filename of the HTML input, or - for stdin')
-    parser.add_argument('output',
-        help='Filename where output is written, or - for stdout')
+    parser.add_argument('-a', '--attachment', action='append',
+                        help='URL or filename of a file '
+                             'to attach to the PDF document')
+    parser.add_argument(
+        'input', help='URL or filename of the HTML input, or - for stdin')
+    parser.add_argument(
+        'output', help='Filename where output is written, or - for stdout')
 
     args = parser.parse_args(argv)
 
@@ -136,6 +144,13 @@ def main(argv=None, stdout=None, stdin=None):
             kwargs['resolution'] = args.resolution
         else:
             parser.error('--resolution only applies for the PNG format.')
+
+    if args.attachment:
+        if format_ == 'pdf':
+            kwargs['attachments'] = args.attachments
+        else:
+            parser.error('--attachment only applies for the PDF format.')
+
     html = HTML(source, base_url=args.base_url, encoding=args.encoding,
                 media_type=args.media_type)
     getattr(html, 'write_' + format_)(output, **kwargs)

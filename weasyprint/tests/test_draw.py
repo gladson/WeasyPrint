@@ -5,14 +5,13 @@
 
     Test the final, drawn results and compare PNG images pixel per pixel.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
 
 from __future__ import division, unicode_literals
 
-import io
 import sys
 import os.path
 import tempfile
@@ -25,11 +24,13 @@ import pytest
 
 from ..compat import xrange, izip, ints_from_bytes
 from ..urls import ensure_url
+from ..html import HTML_HANDLERS
 from .. import HTML
 from .testing_utils import (
     resource_filename, TestHTML, FONTS, assert_no_logs, capture_logs)
 
 
+# RGBA to native-endian ARGB
 as_pixel = (
     lambda x: x[:-1][::-1] + x[-1:]
     if sys.byteorder == 'little' else
@@ -46,7 +47,8 @@ B = as_pixel(b'\x00\x00\xff\xff')  # blue
 def save_pixels_to_png(pixels, width, height, filename):
     """Save raw pixels to a PNG file."""
     cairo.ImageSurface(
-        str('ARGB32'), width, height, data=bytearray(pixels), stride=width * 4
+        cairo.FORMAT_ARGB32, width, height,
+        data=bytearray(pixels), stride=width * 4
     ).write_to_png(filename)
 
 
@@ -115,6 +117,7 @@ def assert_different_renderings(expected_width, expected_height, documents):
                 # the assert hook would be gigantic and useless.
                 assert False, '%s and %s are the same' % (name_1, name_2)
 
+
 def write_png(basename, pixels, width, height):  # pragma: no cover
     """Take a pixel matrix and write a PNG file."""
     directory = os.path.join(os.path.dirname(__file__), 'test_results')
@@ -130,11 +133,12 @@ def html_to_pixels(name, expected_width, expected_height, html):
 
     Also return the document to aid debugging.
     """
-    document = TestHTML(string=html,
+    document = TestHTML(
+        string=html,
         # Dummy filename, but in the right directory.
         base_url=resource_filename('<test>'))
-    pixels = document_to_pixels(document, name, expected_width,
-                               expected_height)
+    pixels = document_to_pixels(
+        document, name, expected_width, expected_height)
     return document, pixels
 
 
@@ -149,7 +153,7 @@ def document_to_pixels(document, name, expected_width, expected_height):
 def image_to_pixels(surface, width, height):
     assert (surface.get_width(), surface.get_height()) == (width, height)
     # RGB24 is actually the same as ARGB32, with A unused.
-    assert surface.get_format() in ('ARGB32', 'RGB24')
+    assert surface.get_format() in (cairo.FORMAT_ARGB32, cairo.FORMAT_RGB24)
     pixels = surface.get_data()[:]
     stride = surface.get_stride()
     row_bytes = width * 4
@@ -210,7 +214,8 @@ def test_canvas_background():
         r+r+r+r+r+r+r+r+r+r,
         r+r+r+r+r+r+r+r+r+r,
         r+r+r+r+r+r+r+r+r+r,
-     ], '''
+
+    ], '''
         <style>
             @page { size: 10px }
             /* html’s background propagates to the whole canvas */
@@ -233,7 +238,7 @@ def test_background_image():
     #    B+B+B+B,
 
     for name, css, pixels in [
-        ('repeat', '', [
+        ('repeat', 'url(pattern.png)', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+r+B+B+B+r+B+B+B+r+B+_+_,
@@ -251,7 +256,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('repeat_x', 'repeat-x', [
+        ('repeat_x', 'url(pattern.png) repeat-x', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+r+B+B+B+r+B+B+B+r+B+_+_,
@@ -269,7 +274,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('repeat_y', 'repeat-y', [
+        ('repeat_y', 'url(pattern.png) repeat-y', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+r+B+B+B+_+_+_+_+_+_+_+_,
@@ -288,7 +293,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
 
-        ('left_top', 'no-repeat 0 0%', [
+        ('left_top', 'url(pattern.png) no-repeat 0 0%', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+r+B+B+B+_+_+_+_+_+_+_+_,
@@ -306,7 +311,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('center_top', 'no-repeat 50% 0px', [
+        ('center_top', 'url(pattern.png) no-repeat 50% 0px', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+r+B+B+B+_+_+_+_+_,
@@ -324,7 +329,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('right_top', 'no-repeat 6px top', [
+        ('right_top', 'url(pattern.png) no-repeat 6px top', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+r+B+B+B+_+_,
@@ -342,7 +347,25 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('left_center', 'no-repeat left center', [
+        ('bottom_6_right_0', 'url(pattern.png) no-repeat bottom 6px right 0', [
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+r+B+B+B+_+_,
+            _+_+_+_+_+_+_+_+B+B+B+B+_+_,
+            _+_+_+_+_+_+_+_+B+B+B+B+_+_,
+            _+_+_+_+_+_+_+_+B+B+B+B+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        ]),
+        ('left_center', 'url(pattern.png) no-repeat left center', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -360,7 +383,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('center_left', 'no-repeat center left', [
+        ('center_left', 'url(pattern.png) no-repeat center left', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -378,7 +401,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('center_center', 'no-repeat 3px 3px', [
+        ('center_center', 'url(pattern.png) no-repeat 3px 3px', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -396,7 +419,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('right_center', 'no-repeat 100% 50%', [
+        ('right_center', 'url(pattern.png) no-repeat 100% 50%', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -415,7 +438,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
 
-        ('left_bottom', 'no-repeat 0% bottom', [
+        ('left_bottom', 'url(pattern.png) no-repeat 0% bottom', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -433,7 +456,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('center_bottom', 'no-repeat center 6px', [
+        ('center_bottom', 'url(pattern.png) no-repeat center 6px', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -451,7 +474,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('bottom_center', 'no-repeat bottom center', [
+        ('bottom_center', 'url(pattern.png) no-repeat bottom center', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -469,7 +492,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('right_bottom', 'no-repeat 6px 100%', [
+        ('right_bottom', 'url(pattern.png) no-repeat 6px 100%', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -488,7 +511,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
 
-        ('repeat_x_1px_2px', 'repeat-x 1px 2px', [
+        ('repeat_x_1px_2px', 'url(pattern.png) repeat-x 1px 2px', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -506,7 +529,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('repeat_y_2px_1px', 'repeat-y 2px 1px', [
+        ('repeat_y_local_2px_1px', 'url(pattern.png) repeat-y local 2px 1px', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+B+B+B+B+_+_+_+_+_+_,
@@ -525,13 +548,13 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
 
-        ('fixed', 'no-repeat fixed', [
+        ('fixed', 'url(pattern.png) no-repeat fixed', [
             # The image is actually here:
             #######
-            _+_+_+_+_+_+_+_+_+_+_+_+_+_, #
-            _+_+_+_+_+_+_+_+_+_+_+_+_+_, #
-            _+_+B+B+_+_+_+_+_+_+_+_+_+_, #
-            _+_+B+B+_+_+_+_+_+_+_+_+_+_, #
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,  #
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,  #
+            _+_+B+B+_+_+_+_+_+_+_+_+_+_,  #
+            _+_+B+B+_+_+_+_+_+_+_+_+_+_,  #
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -545,15 +568,15 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('fixed_right', 'no-repeat fixed right 3px', [
-                                #######
+        ('fixed_right', 'url(pattern.png) no-repeat fixed right 3px', [
+            #                   x x x x
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_+r+B+_+_, #
-            _+_+_+_+_+_+_+_+_+_+B+B+_+_, #
-            _+_+_+_+_+_+_+_+_+_+B+B+_+_, #
-            _+_+_+_+_+_+_+_+_+_+B+B+_+_, #
+            _+_+_+_+_+_+_+_+_+_+r+B+_+_,  # x
+            _+_+_+_+_+_+_+_+_+_+B+B+_+_,  # x
+            _+_+_+_+_+_+_+_+_+_+B+B+_+_,  # x
+            _+_+_+_+_+_+_+_+_+_+B+B+_+_,  # x
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -564,7 +587,7 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
-        ('fixed_center_center', 'no-repeat fixed 50% center', [
+        ('fixed_center_center', 'url(pattern.png)no-repeat fixed 50%center', [
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
@@ -582,13 +605,51 @@ def test_background_image():
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_+_+_,
         ]),
+        ('multi_under', '''url(pattern.png) no-repeat,
+                           url(pattern.png) no-repeat 2px 1px''', [
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+r+B+B+B+_+_+_+_+_+_+_+_,
+            _+_+B+B+B+B+B+B+_+_+_+_+_+_,
+            _+_+B+B+B+B+B+B+_+_+_+_+_+_,
+            _+_+B+B+B+B+B+B+_+_+_+_+_+_,
+            _+_+_+_+B+B+B+B+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        ]),
+        ('multi_over', '''url(pattern.png) no-repeat 2px 1px,
+                          url(pattern.png) no-repeat''', [
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+r+B+B+B+_+_+_+_+_+_+_+_,
+            _+_+B+B+r+B+B+B+_+_+_+_+_+_,
+            _+_+B+B+B+B+B+B+_+_+_+_+_+_,
+            _+_+B+B+B+B+B+B+_+_+_+_+_+_,
+            _+_+_+_+B+B+B+B+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+            _+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        ]),
     ]:
         assert_pixels('background_' + name, 14, 16, pixels, '''
             <style>
                 @page { size: 14px 16px }
                 html { background: #fff }
                 body { margin: 2px; height: 10px;
-                       background: url(pattern.png) %s }
+                       background: %s }
                 p { background: none }
             </style>
             <body>
@@ -671,6 +732,197 @@ def test_background_origin():
     ], css='border-box; background-clip: content-box')
 
 
+@assert_no_logs
+def test_background_repeat_space():
+    """Test for background-repeat: space"""
+    assert_pixels('background_repeat_space', 12, 16, [
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 12px 16px }
+            html { background: #fff }
+            body { margin: 1px; height: 14px;
+                   background: url(pattern.png) space; }
+        </style>
+        <body>
+    ''')
+
+    assert_pixels('background_repeat_space', 12, 14, [
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+r+B+B+B+_+_+r+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+B+B+B+B+_+_+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 12px 14px }
+            html { background: #fff }
+            body { margin: 1px; height: 12px;
+                   background: url(pattern.png) space; }
+        </style>
+        <body>
+    ''')
+
+    assert_pixels('background_repeat_space', 12, 13, [
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+r+B+B+B+r+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+r+B+B+B+r+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 12px 13px }
+            html { background: #fff }
+            body { margin: 1px; height: 11px;
+                   background: url(pattern.png) repeat space; }
+        </style>
+        <body>
+    ''')
+
+
+@assert_no_logs
+def test_background_repeat_round():
+    """Test for background-repeat: round"""
+    assert_pixels('background_repeat_round', 10, 14, [
+        _+_+_+_+_+_+_+_+_+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 10px 14px }
+            html { background: #fff }
+            body { margin: 1px; height: 12px;
+                   image-rendering: optimizeSpeed;
+                   background: url(pattern.png) top/6px round repeat; }
+        </style>
+        <body>
+    ''')
+
+    assert_pixels('background_repeat_round', 10, 18, [
+        _+_+_+_+_+_+_+_+_+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 10px 18px }
+            html { background: #fff }
+            body { margin: 1px; height: 16px;
+                   image-rendering: optimizeSpeed;
+                   background: url(pattern.png) center/auto 8px repeat round; }
+        </style>
+        <body>
+    ''')
+
+    assert_pixels('background_repeat_round', 10, 14, [
+        _+_+_+_+_+_+_+_+_+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+r+r+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 10px 14px }
+            html { background: #fff }
+            body { margin: 1px; height: 12px;
+                   image-rendering: optimizeSpeed;
+                   background: url(pattern.png) center/6px 9px round; }
+        </style>
+        <body>
+    ''')
+
+    assert_pixels('background_repeat_round', 10, 14, [
+        _+_+_+_+_+_+_+_+_+_,
+        _+r+B+B+B+r+B+B+B+_,
+        _+r+B+B+B+r+B+B+B+_,
+        _+r+B+B+B+r+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 10px 14px }
+            html { background: #fff }
+            body { margin: 1px; height: 12px;
+                   image-rendering: optimizeSpeed;
+                   background: url(pattern.png) center/5px 9px round; }
+        </style>
+        <body>
+    ''')
+
 
 @assert_no_logs
 def test_background_clip():
@@ -682,12 +934,12 @@ def test_background_clip():
                 html { background: #fff }
                 body { margin: 1px; padding: 1px; height: 2px;
                        border: 1px solid  transparent;
-                       background: #00f; background-clip : %s }
+                       background: %s }
             </style>
             <body>
         ''' % (value,))
 
-    test_value('border-box', [
+    test_value('#00f border-box', [
         _+_+_+_+_+_+_+_,
         _+B+B+B+B+B+B+_,
         _+B+B+B+B+B+B+_,
@@ -697,7 +949,7 @@ def test_background_clip():
         _+B+B+B+B+B+B+_,
         _+_+_+_+_+_+_+_,
     ])
-    test_value('padding-box', [
+    test_value('#00f padding-box', [
         _+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_,
         _+_+B+B+B+B+_+_,
@@ -707,7 +959,7 @@ def test_background_clip():
         _+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_,
     ])
-    test_value('content-box', [
+    test_value('#00f content-box', [
         _+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_,
@@ -715,6 +967,17 @@ def test_background_clip():
         _+_+_+B+B+_+_+_,
         _+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_,
+    ])
+    G = as_pixel(b'\x00\xff\x00\xff')  # lime green
+    test_value('url(pattern.png) padding-box, #0f0', [
+        _+_+_+_+_+_+_+_,
+        _+G+G+G+G+G+G+_,
+        _+G+r+B+B+B+G+_,
+        _+G+B+B+B+B+G+_,
+        _+G+B+B+B+B+G+_,
+        _+G+B+B+B+B+G+_,
+        _+G+G+G+G+G+G+_,
         _+_+_+_+_+_+_+_,
     ])
 
@@ -742,8 +1005,8 @@ def test_background_size():
             body { margin: 1px; height: 10px;
                    /* Use nearest neighbor algorithm for image resizing: */
                    image-rendering: optimizeSpeed;
-                   background: url(pattern.png) bottom right no-repeat;
-                   background-size: 8px }
+                   background: url(pattern.png) no-repeat
+                               bottom right / 80% 8px; }
         </style>
         <body>
     ''')
@@ -768,8 +1031,7 @@ def test_background_size():
             body { margin: 1px; height: 10px;
                    /* Use nearest neighbor algorithm for image resizing: */
                    image-rendering: optimizeSpeed;
-                   background: url(pattern.png) bottom right no-repeat;
-                   background-size: auto }
+                   background: url(pattern.png) bottom right/auto no-repeat }
         </style>
         <body>
     ''')
@@ -816,8 +1078,7 @@ def test_background_size():
             body { margin: 1px; height: 8px;
                    /* Use nearest neighbor algorithm for image resizing: */
                    image-rendering: optimizeSpeed;
-                   background: url(pattern.png) no-repeat;
-                   background-size: auto 8px;
+                   background: url(pattern.png) no-repeat left / auto 8px;
                    clip: auto; /* no-op to cover more validation */ }
         </style>
         <body>
@@ -841,8 +1102,7 @@ def test_background_size():
             body { margin: 1px; height: 8px;
                    /* Use nearest neighbor algorithm for image resizing: */
                    image-rendering: optimizeSpeed;
-                   background: url(pattern.png) no-repeat;
-                   background-size: 8px 4px;
+                   background: url(pattern.png) no-repeat 0 0 / 8px 4px;
                    clip: auto; /* no-op to cover more validation */ }
         </style>
         <body>
@@ -866,8 +1126,7 @@ def test_background_size():
             body { margin: 1px; height: 8px;
                    /* Use nearest neighbor algorithm for image resizing: */
                    image-rendering: optimizeSpeed;
-                   background: url(pattern.png) no-repeat;
-                   background-size: cover }
+                   background: url(pattern.png) no-repeat right 0/cover }
         </style>
         <body>
     ''')
@@ -877,11 +1136,12 @@ def test_background_size():
 def test_list_style_image():
     """Test images as list markers."""
     for position, pixels in [
-        ('outside', [
-        #   ++++++++++++++      ++++  <li> horizontal margins: 7px 2px
-        #                 ######      <li> width: 12 - 7 - 2 = 3px
-        #               --            list marker margin: 0.5em = 2px
-        #       ********              list marker image is 4px wide
+        ('outside',
+         #  ++++++++++++++      ++++  <li> horizontal margins: 7px 2px
+         #                ######      <li> width: 12 - 7 - 2 = 3px
+         #              --            list marker margin: 0.5em = 2px
+         #      ********              list marker image is 4px wide
+         [
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+r+B+B+B+_+_+_+_+_+_,
@@ -892,11 +1152,12 @@ def test_list_style_image():
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
-        ]),
-        ('inside', [
-        #   ++++++++++++++      ++++  <li> horizontal margins: 7px 2px
-        #                 ######      <li> width: 12 - 7 - 2 = 3px
-        #                 ********    list marker image is 4px wide: overflow
+         ]),
+        ('inside',
+         #  ++++++++++++++      ++++  <li> horizontal margins: 7px 2px
+         #                ######      <li> width: 12 - 7 - 2 = 3px
+         #                ********    list marker image is 4px wide: overflow
+         [
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+r+B+B+B+_,
@@ -907,7 +1168,7 @@ def test_list_style_image():
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
             _+_+_+_+_+_+_+_+_+_+_+_,
-        ])
+         ])
     ]:
         assert_pixels('list_style_image_' + position, 12, 10, pixels, '''
             <style>
@@ -920,24 +1181,24 @@ def test_list_style_image():
         ''' % (FONTS, position))
 
     assert_pixels('list_style_none', 10, 10, [
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-            _+_+_+_+_+_+_+_+_+_,
-        ], '''
-            <style>
-                @page { size: 10px }
-                body { margin: 0; background: white; font-family: %s }
-                ul { margin: 0 0 0 5px; list-style: none; font-size: 2px; }
-            </style>
-            <ul><li>
-        ''' % (FONTS,))
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 10px }
+            body { margin: 0; background: white; font-family: %s }
+            ul { margin: 0 0 0 5px; list-style: none; font-size: 2px; }
+        </style>
+        <ul><li>
+    ''' % (FONTS,))
 
 
 @assert_no_logs
@@ -1006,7 +1267,7 @@ def test_images():
             <div><img src="inexistent1.png" alt=""></div>
         ''')
     assert len(logs) == 1
-    assert 'WARNING: Error for image' in logs[0]
+    assert 'WARNING: Failed to load image' in logs[0]
     assert 'inexistent1.png' in logs[0]
     assert_pixels('image_no_src', 8, 8, no_image, '''
         <style>
@@ -1037,9 +1298,9 @@ def test_images():
             ]
         ])
     assert len(logs) == 2
-    assert 'WARNING: Error for image' in logs[0]
+    assert 'WARNING: Failed to load image' in logs[0]
     assert 'inexistent2.png' in logs[0]
-    assert 'WARNING: Error for image at data:image/svg+xml' in logs[1]
+    assert 'WARNING: Failed to load image at data:image/svg+xml' in logs[1]
     assert 'intrinsic size' in logs[1]
 
     assert_pixels('image_0x1', 8, 8, no_image, '''
@@ -1066,7 +1327,6 @@ def test_images():
         <div><img src="pattern.png" alt="not shown"
                   style="width: 0; height: 0"></div>
     ''')
-
 
     page_break = [
         _+_+_+_+_+_+_+_,
@@ -1154,6 +1414,32 @@ def test_images():
     ''')
 
 
+def test_image_resolution():
+    assert_same_rendering(20, 20, [
+        ('image_resolution_ref', '''
+            <style>@page { size: 20px; margin: 2px; background: #fff }</style>
+            <div style="font-size: 0">
+                <img src="pattern.png" style="width: 8px"></div>
+        '''),
+        ('image_resolution_img', '''
+            <style>@page { size: 20px; margin: 2px; background: #fff }</style>
+            <div style="image-resolution: .5dppx; font-size: 0">
+                <img src="pattern.png"></div>
+        '''),
+        ('image_resolution_content', '''
+            <style>@page { size: 20px; margin: 2px; background: #fff }
+                   div::before { content: url(pattern.png) }
+            </style>
+            <div style="image-resolution: .5dppx; font-size: 0"></div>
+        '''),
+        ('image_resolution_background', '''
+            <style>@page { size: 20px; margin: 2px; background: #fff }
+            </style>
+            <div style="height: 16px; image-resolution: .5dppx;
+                        background: url(pattern.png) no-repeat"></div>
+        '''),
+    ])
+
 
 @assert_no_logs
 def test_visibility():
@@ -1204,43 +1490,51 @@ def test_visibility():
 @assert_no_logs
 @requires_cairo_1_12
 def test_tables():
+    # TODO: refactor colspan/rowspan into CSS:
+    # td, th { column-span: attr(colspan integer) }
+    HTML_HANDLERS['x-td'] = HTML_HANDLERS['td']
+    HTML_HANDLERS['x-th'] = HTML_HANDLERS['th']
+
     source = '''
         <style>
             @page { size: 28px; background: #fff }
-            table { margin: 1px; padding: 1px; border-spacing: 1px;
-                    border: 1px solid transparent }
-            td { width: 2px; height: 2px; padding: 1px;
-                 border: 1px solid transparent }
+            x-table { margin: 1px; padding: 1px; border-spacing: 1px;
+                      border: 1px solid transparent }
+            x-td { width: 2px; height: 2px; padding: 1px;
+                   border: 1px solid transparent }
             %(extra_css)s
         </style>
-        <table>
-            <colgroup>
-                <col>
-                <col>
-            </colgroup>
-            <col>
-            <thead>
-                <tr>
-                    <td></td>
-                    <td rowspan=2></td>
-                    <td></td>
-                </tr>
-                <tr>
-                    <td colspan=2></td>
-                    <td></td>
-                </tr>
-            </thead>
-            <tr>
-                <td></td>
-                <td></td>
-            </tr>
-        </table>
+        <x-table>
+            <x-colgroup>
+                <x-col></x-col>
+                <x-col></x-col>
+            </x-colgroup>
+            <x-col></x-col>
+            <x-tbody>
+                <x-tr>
+                    <x-td></x-td>
+                    <x-td rowspan=2></x-td>
+                    <x-td></x-td>
+                </x-tr>
+                <x-tr>
+                    <x-td colspan=2></x-td>
+                    <x-td></x-td>
+                </x-tr>
+            </x-tbody>
+            <x-tr>
+                <x-td></x-td>
+                <x-td></x-td>
+            </x-tr>
+        </x-table>
     '''
-    r = as_pixel(b'\xff\x7f\x7f\xff')  # rgba(255, 0, 0, 0.5) above #fff
-    R = as_pixel(b'\xff\x3f\x3f\xff')  # r above r above #fff
-    g = as_pixel(b'\x7f\xff\x7f\xff')  # rgba(0, 255, 0, 0.5) above #fff
-    G = as_pixel(b'\x7f\xbf\x3f\xff')  # g above r above #fff
-                                       #   Not the same as r above g above #fff
+    # rgba(255, 0, 0, 0.5) above #fff
+    r = as_pixel(b'\xff\x7f\x7f\xff')
+    # r above r above #fff
+    R = as_pixel(b'\xff\x3f\x3f\xff')
+    # rgba(0, 255, 0, 0.5) above #fff
+    g = as_pixel(b'\x7f\xff\x7f\xff')
+    # g above r above #fff. Not the same as r above g above #fff
+    G = as_pixel(b'\x7f\xbf\x3f\xff')
     assert_pixels('table_borders', 28, 28, [
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
         _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
@@ -1271,8 +1565,8 @@ def test_tables():
         _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border-color: #00f; table-layout: fixed }
-        td { border-color: rgba(255, 0, 0, 0.5) }
+        x-table { border-color: #00f; table-layout: fixed }
+        x-td { border-color: rgba(255, 0, 0, 0.5) }
     '''})
 
     assert_pixels('table_collapsed_borders', 28, 28, [
@@ -1305,9 +1599,9 @@ def test_tables():
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border: 2px solid #00f; table-layout: fixed;
-                border-collapse: collapse }
-        td { border-color: #ff7f7f }
+        x-table { border: 2px solid #00f; table-layout: fixed;
+                  border-collapse: collapse }
+        x-td { border-color: #ff7f7f }
     '''})
 
     assert_pixels('table_collapsed_borders_paged', 28, 52, [
@@ -1364,9 +1658,9 @@ def test_tables():
         _+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+g+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border: solid #00f; border-width: 8px 2px;
-                table-layout: fixed; border-collapse: collapse }
-        td { border-color: #ff7f7f }
+        x-table { border: solid #00f; border-width: 8px 2px;
+                  table-layout: fixed; border-collapse: collapse }
+        x-td { border-color: #ff7f7f }
         @page { size: 28px 26px; margin: 1px;
                 border: 1px solid rgba(0, 255, 0, 0.5); }
     '''})
@@ -1401,8 +1695,8 @@ def test_tables():
         _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border-color: #00f; table-layout: fixed }
-        td { background: rgba(255, 0, 0, 0.5) }
+        x-table { border-color: #00f; table-layout: fixed }
+        x-td { background: rgba(255, 0, 0, 0.5) }
     '''})
 
     assert_pixels('table_column_backgrounds', 28, 28, [
@@ -1435,9 +1729,9 @@ def test_tables():
         _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border-color: #00f; table-layout: fixed }
-        colgroup { background: rgba(255, 0, 0, 0.5) }
-        col { background: rgba(0, 255, 0, 0.5) }
+        x-table { border-color: #00f; table-layout: fixed }
+        x-colgroup { background: rgba(255, 0, 0, 0.5) }
+        x-col { background: rgba(0, 255, 0, 0.5) }
     '''})
 
     assert_pixels('table_row_backgrounds', 28, 28, [
@@ -1470,11 +1764,137 @@ def test_tables():
         _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
         _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
     ], source % {'extra_css': '''
-        table { border-color: #00f; table-layout: fixed }
-        thead { background: rgba(255, 0, 0, 0.5) }
-        tr { background: rgba(0, 255, 0, 0.5) }
+        x-table { border-color: #00f; table-layout: fixed }
+        x-tbody { background: rgba(255, 0, 0, 0.5) }
+        x-tr { background: rgba(0, 255, 0, 0.5) }
     '''})
 
+    r = as_pixel(b'\xff\x00\x00\xff')
+    assert_pixels('collapsed_border_thead', 22, 36, [
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 22px 18px; margin: 1px; background: #fff }
+            td { border: 1px red solid; width: 4px; height: 3px; }
+        </style>
+        <table style="table-layout: fixed; border-collapse: collapse">
+            <thead style="border: blue solid; border-width: 2px 3px;
+                "><td></td><td></td><td></td></thead>
+            <tr><td></td><td></td><td></td></tr>
+            <tr><td></td><td></td><td></td></tr>
+            <tr><td></td><td></td><td></td></tr>
+    ''')
+
+    assert_pixels('collapsed_border_tfoot', 22, 36, [
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+_+r+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+_+r+_+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+_+_+_+_+r+_+_+_+_+r+_+_+_+_+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+B+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 22px 18px; margin: 1px; background: #fff }
+            td { border: 1px red solid; width: 4px; height: 3px; }
+        </style>
+        <table style="table-layout: fixed; margin-left: 1px;
+                      border-collapse: collapse">
+            <tr><td></td><td></td><td></td></tr>
+            <tr><td></td><td></td><td></td></tr>
+            <tr><td></td><td></td><td></td></tr>
+            <tfoot style="border: blue solid; border-width: 2px 3px;
+                "><td></td><td></td><td></td></tfoot>
+    ''')
+
+    # Regression test for inline table with collapsed border and alignment
+    # rendering borders incorrectly
+    # https://github.com/Kozea/WeasyPrint/issues/82
+    assert_pixels('inline_text_align', 20, 10, [
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+r+r+r+r+r+r+r+r+r+r+r+_,
+        _+_+_+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+r+_,
+        _+_+_+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+r+_,
+        _+_+_+_+_+_+_+_+r+_+_+_+_+r+_+_+_+_+r+_,
+        _+_+_+_+_+_+_+_+r+r+r+r+r+r+r+r+r+r+r+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 20px 10px; margin: 1px; background: #fff }
+            body { text-align: right; font-size: 0 }
+            table { display: inline-table; width: 11px }
+            td { border: 1px red solid; width: 4px; height: 3px }
+        </style>
+        <table style="table-layout: fixed; border-collapse: collapse">
+            <tr><td></td><td></td></tr>
+    ''')
 
 
 @assert_no_logs
@@ -1486,7 +1906,7 @@ def test_before_after():
                 body { margin: 0; background: #fff }
                 a[href]:before { content: '[' attr(href) '] ' }
             </style>
-            <p><a href="some url">some content</p>
+            <p><a href="some url">some content</a></p>
         '''),
         ('pseudo_before_reference', '''
             <style>
@@ -1586,6 +2006,35 @@ def test_borders(margin='10px', prop='border'):
 
 def test_outlines():
     return test_borders(margin='20px', prop='outline')
+
+
+@assert_no_logs
+def test_small_borders():
+    # Regression test for ZeroDivisionError on dashed or dotted borders
+    # smaller than a dash/dot.
+    # https://github.com/Kozea/WeasyPrint/issues/49
+    html = '''
+        <style>
+            @page { size: 50px 50px }
+            html { background: #fff }
+            body { margin: 5px; height: 0; border: 10px %s blue }
+        </style>
+        <body>'''
+    for style in ['none', 'solid', 'dashed', 'dotted']:
+        HTML(string=html % style).write_image_surface()
+
+    # Regression test for ZeroDivisionError on dashed or dotted borders
+    # smaller than a dash/dot.
+    # https://github.com/Kozea/WeasyPrint/issues/146
+    html = '''
+        <style>
+            @page { size: 50px 50px }
+            html { background: #fff }
+            body { height: 0; width: 0; border-width: 1px 0; border-style: %s }
+        </style>
+        <body>'''
+    for style in ['none', 'solid', 'dashed', 'dotted']:
+        HTML(string=html % style).write_image_surface()
 
 
 @assert_no_logs
@@ -1731,9 +2180,28 @@ def test_overflow():
                     margin: 2px;
                     padding-bottom: 2px;
                     border-bottom: 1px transparent solid; }
-            body { height: 1px; overflow: hidden; font-size:0 }
+            body { height: 1px; overflow: hidden; font-size: 0 }
         </style>
         <div><img src="pattern.png"></div>
+    ''')
+
+    # Assert that the border is not clipped by overflow: hidden
+    assert_pixels('border_box_overflow', 8, 8, [
+        _+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_,
+        _+_+B+B+B+B+_+_,
+        _+_+B+_+_+B+_+_,
+        _+_+B+_+_+B+_+_,
+        _+_+B+B+B+B+_+_,
+        _+_+_+_+_+_+_+_,
+        _+_+_+_+_+_+_+_,
+    ], '''
+        <style>
+            @page { size: 8px; background: #fff; margin: 2px; }
+            div { width: 2px; height: 2px; overflow: hidden;
+                  border: 1px solid blue; }
+        </style>
+        <div></div>
     ''')
 
 
@@ -1742,6 +2210,7 @@ def test_overflow():
 def test_clip():
     """Test the clip property."""
     num = [0]
+
     def clip(css, pixels):
         num[0] += 1
         name = 'background_repeat_clipped_%s' % num[0]
@@ -1871,7 +2340,7 @@ def test_opacity():
             <div style="background: none; opacity: 0.666666">
                 <div style="opacity: 0.9"></div>
             </div>
-        '''),  #  0.9 * 0.666666 == 0.6
+        '''),  # 0.9 * 0.666666 == 0.6
     ])
 
 
@@ -2201,3 +2670,134 @@ def test_acid2():
     assert_pixels_equal(
         'acid2', width, height, image_to_pixels(test_image, width, height),
         image_to_pixels(ref_image, width, height), tolerance=2)
+
+
+@assert_no_logs
+def test_linear_gradients():
+    assert_pixels('linear_gradient', 5, 9, [
+        _+_+_+_+_,
+        _+_+_+_+_,
+        _+_+_+_+_,
+        B+B+B+B+B,
+        B+B+B+B+B,
+        r+r+r+r+r,
+        r+r+r+r+r,
+        r+r+r+r+r,
+        r+r+r+r+r,
+    ], '''<style>@page { size: 5px 9px; background: linear-gradient(
+        white, white 3px, blue 0, blue 5px, red 0, red
+    )''')
+    assert_pixels('linear_gradient', 5, 9, [
+        _+_+_+_+_,
+        _+_+_+_+_,
+        _+_+_+_+_,
+        B+B+B+B+B,
+        B+B+B+B+B,
+        r+r+r+r+r,
+        r+r+r+r+r,
+        r+r+r+r+r,
+        r+r+r+r+r,
+    ], '''<style>@page { size: 5px 9px; background: linear-gradient(
+        white 3px, blue 0, blue 5px, red 0
+    )''')
+    assert_pixels('linear_gradient', 9, 5, [
+        _+_+_+B+B+r+r+r+r,
+        _+_+_+B+B+r+r+r+r,
+        _+_+_+B+B+r+r+r+r,
+        _+_+_+B+B+r+r+r+r,
+        _+_+_+B+B+r+r+r+r,
+    ], '''<style>@page { size: 9px 5px; background: linear-gradient(
+        to right, white 3px, blue 0, blue 5px, red 0
+    )''')
+    assert_pixels('linear_gradient', 10, 5, [
+        B+B+B+B+B+B+r+r+r+r,
+        B+B+B+B+B+B+r+r+r+r,
+        B+B+B+B+B+B+r+r+r+r,
+        B+B+B+B+B+B+r+r+r+r,
+        B+B+B+B+B+B+r+r+r+r,
+    ], '''<style>@page { size: 10px 5px; background: linear-gradient(
+        to right, blue 5px, blue 6px, red 6px, red 9px
+    )''')
+    assert_pixels('linear_gradient', 10, 5, [
+        r+B+r+r+r+B+r+r+r+B,
+        r+B+r+r+r+B+r+r+r+B,
+        r+B+r+r+r+B+r+r+r+B,
+        r+B+r+r+r+B+r+r+r+B,
+        r+B+r+r+r+B+r+r+r+B,
+    ], '''<style>@page { size: 10px 5px; background: repeating-linear-gradient(
+        to right, blue 50%, blue 60%, red 60%, red 90%
+    )''')
+    assert_pixels('linear_gradient', 9, 5, [
+        B+B+B+r+r+r+r+r+r,
+        B+B+B+r+r+r+r+r+r,
+        B+B+B+r+r+r+r+r+r,
+        B+B+B+r+r+r+r+r+r,
+        B+B+B+r+r+r+r+r+r,
+    ], '''<style>@page { size: 9px 5px; background: linear-gradient(
+        to right, blue 3px, blue 3px, red 3px, red 3px
+    )''')
+    v = as_pixel(b'\x80\x00\x80\xff')  # Average of B and r.
+    assert_pixels('linear_gradient', 9, 5, [
+        v+v+v+v+v+v+v+v+v,
+        v+v+v+v+v+v+v+v+v,
+        v+v+v+v+v+v+v+v+v,
+        v+v+v+v+v+v+v+v+v,
+        v+v+v+v+v+v+v+v+v,
+    ], '''<style>@page { size: 9px 5px; background: repeating-linear-gradient(
+        to right, blue 3px, blue 3px, red 3px, red 3px
+    )''')
+    V = as_pixel(b'\xC0\x00\x3f\xff')  # Average of 1*B and 3*r.
+    assert_pixels('linear_gradient', 9, 5, [
+        V+V+V+V+V+V+V+V+V,
+        V+V+V+V+V+V+V+V+V,
+        V+V+V+V+V+V+V+V+V,
+        V+V+V+V+V+V+V+V+V,
+        V+V+V+V+V+V+V+V+V,
+    ], '''<style>@page { size: 9px 5px; background: repeating-linear-gradient(
+            to right, blue 50%, blue 60%, red 60%, red 90%);
+        background-size: 1px 1px;
+    ''')
+
+
+@assert_no_logs
+def test_radial_gradients():
+    assert_pixels('radial_gradient', 6, 6, [
+        B+B+B+B+B+B,
+        B+B+B+B+B+B,
+        B+B+B+B+B+B,
+        B+B+B+B+B+B,
+        B+B+B+B+B+B,
+        B+B+B+B+B+B,
+    ], '''<style>@page { size: 6px; background:
+        radial-gradient(red -30%, blue -10%)''')
+    assert_pixels('radial_gradient', 6, 6, [
+        r+r+r+r+r+r,
+        r+r+r+r+r+r,
+        r+r+r+r+r+r,
+        r+r+r+r+r+r,
+        r+r+r+r+r+r,
+        r+r+r+r+r+r,
+    ], '''<style>@page { size: 6px; background:
+        radial-gradient(red 110%, blue 130%)''')
+    for thin, gradient in ((False, 'red 20%, blue 80%'),
+                           (True, 'red 50%, blue 50%')):
+        _, pixels = html_to_pixels(
+            'radial_gradient_' + gradient, 10, 16,
+            '<style>@page { size: 10px 16px; background: radial-gradient(%s)'
+            % gradient)
+
+        def pixel(x, y):
+            i = (x + 10 * y) * 4
+            return pixels[i:i + 4]
+        assert pixel(0, 0) == B
+        assert pixel(9, 0) == B
+        assert pixel(0, 15) == B
+        assert pixel(9, 15) == B
+        assert pixel(4, 7) == r
+        assert pixel(4, 8) == r
+        assert pixel(5, 7) == r
+        assert pixel(5, 8) == r
+        assert (pixel(3, 5) not in (B, r)) ^ thin
+        assert (pixel(3, 9) not in (B, r)) ^ thin
+        assert (pixel(7, 5) not in (B, r)) ^ thin
+        assert (pixel(7, 9) not in (B, r)) ^ thin

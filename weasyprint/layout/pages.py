@@ -5,7 +5,7 @@
 
     Layout for pages and CSS3 margin boxes.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -41,7 +41,6 @@ class OrientedBox(object):
 
     def shrink_to_fit(self, available):
         self.inner = min(max(self.minimum, available), self.preferred)
-
 
 
 class VerticalBox(OrientedBox):
@@ -211,7 +210,7 @@ def compute_variable_dimension(context, side_boxes, vertical, outer_sum):
     if box_b.box.is_generated:
         if box_b.inner == 'auto':
             ac_preferred = 2 * max(
-                    box_a.outer_preferred, box_c.outer_preferred)
+                box_a.outer_preferred, box_c.outer_preferred)
             if outer_sum >= box_b.outer_preferred + ac_preferred:
                 box_b.inner = box_b.preferred
             else:
@@ -403,7 +402,7 @@ def margin_box_content_layout(context, page, box):
         last_child = box.children[-1]
         top = first_child.position_y
         # Not always exact because floating point errors
-        #assert top == box.content_box_y()
+        # assert top == box.content_box_y()
         bottom = last_child.position_y + last_child.margin_height()
         content_height = bottom - top
         offset = box.height - content_height
@@ -504,6 +503,9 @@ def make_page(context, root_box, page_type, resume_at, content_empty):
         positioned_boxes, positioned_boxes, adjoining_margins)
     assert root_box
 
+    page.fixed_boxes = [
+        placeholder._box for placeholder in positioned_boxes
+        if placeholder._box.style.position == 'fixed']
     for absolute_box in positioned_boxes:
         absolute_layout(context, absolute_box, page, positioned_boxes)
     context.finish_block_formatting_context(root_box)

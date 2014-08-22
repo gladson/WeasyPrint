@@ -9,7 +9,7 @@
     This includes creating anonymous boxes and processing whitespace
     as necessary.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -48,7 +48,20 @@ BOX_TYPE_FROM_DISPLAY = {
 
 def build_formatting_structure(element_tree, style_for, get_image_from_uri):
     """Build a formatting structure (box tree) from an element tree."""
-    box, = element_to_box(element_tree, style_for, get_image_from_uri)
+    box_list = element_to_box(element_tree, style_for, get_image_from_uri)
+    if box_list:
+        box, = box_list
+    else:
+        # No root element
+        def root_style_for(element, pseudo_type=None):
+            style = style_for(element, pseudo_type)
+            if style:
+                if element.getparent() is None:
+                    style.display = 'block'
+                else:
+                    style.display = 'none'
+            return style
+        box, = element_to_box(element_tree, root_style_for, get_image_from_uri)
     box.is_for_root_element = True
     # If this is changed, maybe update weasy.layout.pages.make_margin_boxes()
     process_whitespace(box)
@@ -73,6 +86,7 @@ def make_box(element_tag, sourceline, style, content, get_image_from_uri):
 
     return BOX_TYPE_FROM_DISPLAY[style.display](element_tag, sourceline,
                                                 style, content)
+
 
 def element_to_box(element, style_for, get_image_from_uri, state=None):
     """Convert an element and its children into a box with children.
@@ -285,12 +299,10 @@ def add_box_marker(box, counter_values, get_image_from_uri):
 
     """
     style = box.style
-    image = style.list_style_image
-    if image != 'none':
+    image_type, image = style.list_style_image
+    if image_type == 'url':
         # surface may be None here too, in case the image is not available.
         image = get_image_from_uri(image)
-    else:
-        image = None
 
     if image is None:
         type_ = style.list_style_type
@@ -423,7 +435,8 @@ def table_boxes_children(box, children):
 
     if isinstance(box, boxes.TableBox):
         # Rule 2.1
-        children = wrap_improper(box, children, boxes.TableRowBox,
+        children = wrap_improper(
+            box, children, boxes.TableRowBox,
             lambda child: child.proper_table_child)
     elif isinstance(box, boxes.TableRowGroupBox):
         # Rule 2.2
@@ -434,20 +447,21 @@ def table_boxes_children(box, children):
         children = wrap_improper(box, children, boxes.TableCellBox)
     else:
         # Rule 3.1
-        children = wrap_improper(box, children, boxes.TableRowBox,
+        children = wrap_improper(
+            box, children, boxes.TableRowBox,
             lambda child: not isinstance(child, boxes.TableCellBox))
 
     # Rule 3.2
     if isinstance(box, boxes.InlineBox):
-        children = wrap_improper(box, children, boxes.InlineTableBox,
+        children = wrap_improper(
+            box, children, boxes.InlineTableBox,
             lambda child: not child.proper_table_child)
     else:
         parent_type = type(box)
-        children = wrap_improper(box, children, boxes.TableBox,
-            lambda child:
-                not child.proper_table_child or
-                parent_type in child.proper_parents)
-
+        children = wrap_improper(
+            box, children, boxes.TableBox,
+            lambda child: (not child.proper_table_child or
+                           parent_type in child.proper_parents))
 
     if isinstance(box, boxes.TableBox):
         return wrap_table(box, children)
@@ -501,30 +515,25 @@ def wrap_table(box, children):
             grid_x += group.span
     grid_width = grid_x
 
-    row_groups =wrap_improper(box, rows, boxes.TableRowGroupBox)
-    if box.style.border_collapse == 'collapse':
-        # XXX For now table headers and footers in the collapsing border model
-        # are not repeated on every page.
-        row_groups = list(row_groups)
-    else:
-        # Extract the optional header and footer groups.
-        body_row_groups = []
-        header = None
-        footer = None
-        for group in row_groups:
-            display = group.style.display
-            if display == 'table-header-group' and header is None:
-                group.is_header = True
-                header = group
-            elif display == 'table-footer-group' and footer is None:
-                group.is_footer = True
-                footer = group
-            else:
-                body_row_groups.append(group)
-        row_groups = (
-            ([header] if header is not None else []) +
-            body_row_groups +
-            ([footer] if footer is not None else []))
+    row_groups = wrap_improper(box, rows, boxes.TableRowGroupBox)
+    # Extract the optional header and footer groups.
+    body_row_groups = []
+    header = None
+    footer = None
+    for group in row_groups:
+        display = group.style.display
+        if display == 'table-header-group' and header is None:
+            group.is_header = True
+            header = group
+        elif display == 'table-footer-group' and footer is None:
+            group.is_footer = True
+            footer = group
+        else:
+            body_row_groups.append(group)
+    row_groups = (
+        ([header] if header is not None else []) +
+        body_row_groups +
+        ([footer] if footer is not None else []))
 
     # Assign a (x,y) position in the grid to each cell.
     # rowspan can not extend beyond a row group, so each row group
@@ -696,8 +705,9 @@ def collapse_table_borders(table, grid_width, grid_height):
         set_transparent_border(box, 'left', 0)
 
     def max_vertical_width(x, y, h):
-        return max(width for grid_row in vertical_borders[y:y+h]
-                         for _, (_, width, _) in [grid_row[x]])
+        return max(
+            width for grid_row in vertical_borders[y:y+h]
+            for _, (_, width, _) in [grid_row[x]])
 
     def max_horizontal_width(x, y, w):
         return max(width for _, (_, width, _) in horizontal_borders[y][x:x+w])
@@ -781,6 +791,8 @@ def process_whitespace(box, following_collapsible_space=False):
             if following_collapsible_space and text.startswith(' '):
                 text = text[1:]
             following_collapsible_space = previous_text.endswith(' ')
+            if handling == 'nowrap':
+                text = re.sub('(?!^) (?!$)', '\xA0', text)
         else:
             following_collapsible_space = False
 
@@ -958,7 +970,8 @@ def block_in_inline(box):
 
     for child in box.children:
         if isinstance(child, boxes.LineBox):
-            assert len(box.children) == 1, ('Line boxes should have no '
+            assert len(box.children) == 1, (
+                'Line boxes should have no '
                 'siblings at this stage, got %r.' % box.children)
             stack = None
             while 1:
@@ -1107,7 +1120,7 @@ TEXT_CONTENT_EXTRACTORS = {
     'contents': box_text_contents,
     'content-element': box_text_content_element,
     'content-before': box_text_content_before,
-    'content-before': box_text_content_after}
+    'content-after': box_text_content_after}
 
 
 def resolve_bookmark_labels(box):

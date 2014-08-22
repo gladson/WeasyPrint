@@ -3,7 +3,7 @@
     weasyprint.document
     -------------------
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -25,16 +25,17 @@ from .css import get_all_computed_styles
 from .formatting_structure import boxes
 from .formatting_structure.build import build_formatting_structure
 from .layout import layout_document
-from .draw import draw_page, stacked, percentage
+from .layout.backgrounds import percentage
+from .draw import draw_page, stacked
 from .pdf import write_pdf_metadata
-from .compat import izip, iteritems
+from .compat import izip, iteritems, unicode
 from .urls import FILESYSTEM_ENCODING
 
 
 def _get_matrix(box):
     """Return the matrix for the CSS transforms on this box.
 
-    :returns: a :class:`cairo.Matrix` object or :obj:`None`.
+    :returns: a :class:`cairocffi.Matrix` object or :obj:`None`.
 
     """
     # "Transforms apply to block-level and atomic inline-level elements,
@@ -98,7 +99,11 @@ class _TaggedTuple(tuple):
     """
 
 
-def _get_metadata(box, bookmarks, links, anchors, matrix):
+def _gather_links_and_bookmarks(box, bookmarks, links, anchors, matrix):
+    transform = _get_matrix(box)
+    if transform:
+        matrix = transform * matrix if matrix else transform
+
     bookmark_label = box.bookmark_label
     bookmark_level = box.bookmark_level
     link = box.style.link
@@ -108,11 +113,14 @@ def _get_metadata(box, bookmarks, links, anchors, matrix):
     has_link = link and not isinstance(box, boxes.TextBox)
     # In case of duplicate IDs, only the first is an anchor.
     has_anchor = anchor_name and anchor_name not in anchors
+    is_attachment = hasattr(box, 'is_attachment') and box.is_attachment
 
     if has_bookmark or has_link or has_anchor:
         pos_x, pos_y, width, height = box.hit_area()
         if has_link:
             link_type, target = link
+            if link_type == 'external' and is_attachment:
+                link_type = 'attachment'
             if matrix:
                 link = _TaggedTuple(
                     (link_type, target, rectangle_aabb(
@@ -129,14 +137,8 @@ def _get_metadata(box, bookmarks, links, anchors, matrix):
         if has_anchor:
             anchors[anchor_name] = pos_x, pos_y
 
-
-def _prepare(box, bookmarks, links, anchors, matrix):
-    transform = _get_matrix(box)
-    if transform:
-        matrix = transform * matrix if matrix else transform
-    _get_metadata(box, bookmarks, links, anchors, matrix)
     for child in box.all_children():
-        _prepare(child, bookmarks, links, anchors, matrix)
+        _gather_links_and_bookmarks(child, bookmarks, links, anchors, matrix)
 
 
 class Page(object):
@@ -168,35 +170,48 @@ class Page(object):
         #:
         #: * ``'external'``: :obj:`target` is an absolute URL
         #: * ``'internal'``: :obj:`target` is an anchor name (see
-        #:   :attr:`Page.anchors`). The anchor might be defined in
-        #:   another page, in multiple pages, or not at all.
+        #:   :attr:`Page.anchors`).
+        #    The anchor might be defined in another page,
+        #    in multiple pages (in which case the first occurence is used),
+        #    or not at all.
+        #: * ``'attachment'``: :obj:`target` is an absolute URL and points
+        #:   to a resource to attach to the document.
         self.links = links = []
 
         #: A dict mapping anchor names to their target, ``(x, y)`` points
         #: in CSS pixels form the top-left of the page.)
         self.anchors = anchors = {}
 
-        _prepare(page_box, bookmarks, links, anchors, matrix=None)
+        _gather_links_and_bookmarks(
+            page_box, bookmarks, links, anchors, matrix=None)
         self._page_box = page_box
         self._enable_hinting = enable_hinting
 
     def paint(self, cairo_context, left_x=0, top_y=0, scale=1, clip=False):
-        """Paint the surface in cairo, on any type of surface.
+        """Paint the page in cairo, on any type of surface.
 
-        :param cairo_context: any :class:`cairo.Context` object.
-        :type left_x: float
+        :param cairo_context:
+            Any :class:`cairocffi.Context` object.
+
+            .. note::
+
+                In case you get a :class:`cairo.Context` object
+                (eg. form PyGTK),
+                it is possible to :ref:`convert it to cairocffi
+                <converting_pycairo>`.
         :param left_x:
             X coordinate of the left of the page, in cairo user units.
-        :type top_y: float
         :param top_y:
             Y coordinate of the top of the page, in cairo user units.
-        :type scale: float
         :param scale:
             Zoom scale in cairo user units per CSS pixel.
-        :type clip: bool
         :param clip:
             Whether to clip/cut content outside the page. If false or
             not provided, content can overflow.
+        :type left_x: float
+        :type top_y: float
+        :type scale: float
+        :type clip: bool
 
         """
         with stacked(cairo_context):
@@ -226,14 +241,67 @@ class Page(object):
             draw_page(self._page_box, cairo_context, self._enable_hinting)
 
 
+class DocumentMetadata(object):
+    """Contains meta-information about a :class:`Document`
+    that do not belong to specific pages but to the whole document.
+
+    New attributes may be added in future versions of WeasyPrint.
+
+    .. _W3C’s profile of ISO 8601: http://www.w3.org/TR/NOTE-datetime
+
+    """
+    def __init__(self, title=None, authors=None, description=None,
+                 keywords=None, generator=None, created=None, modified=None,
+                 attachments=None):
+        #: The title of the document, as a string or :obj:`None`.
+        #: Extracted from the ``<title>`` element in HTML
+        #: and written to the ``/Title`` info field in PDF.
+        self.title = title
+        #: The authors of the document as a list of strings.
+        #: Extracted from the ``<meta name=author>`` elements in HTML
+        #: and written to the ``/Author`` info field in PDF.
+        self.authors = authors or []
+        #: The description of the document, as a string or :obj:`None`.
+        #: Extracted from the ``<meta name=description>`` element in HTML
+        #: and written to the ``/Subject`` info field in PDF.
+        self.description = description
+        #: Keywords associated with the document, as a list of strings.
+        #: (Defaults to the empty list.)
+        #: Extracted from ``<meta name=keywords>`` elements in HTML
+        #: and written to the ``/Keywords`` info field in PDF.
+        self.keywords = keywords or []
+        #: The name of one of the software packages
+        #: used to generate the document, as a string or :obj:`None`.
+        #: Extracted from the ``<meta name=generator>`` element in HTML
+        #: and written to the ``/Creator`` info field in PDF.
+        self.generator = generator
+        #: The creation date of the document, as a string or :obj:`None`.
+        #: Dates are in one of the six formats specified in
+        #: `W3C’s profile of ISO 8601`_.
+        #: Extracted from the ``<meta name=dcterms.created>`` element in HTML
+        #: and written to the ``/CreationDate`` info field in PDF.
+        self.created = created
+        #: The modification date of the document, as a string or :obj:`None`.
+        #: Dates are in one of the six formats specified in
+        #: `W3C’s profile of ISO 8601`_.
+        #: Extracted from the ``<meta name=dcterms.modified>`` element in HTML
+        #: and written to the ``/ModDate`` info field in PDF.
+        self.modified = modified
+        #: File attachments as a list of tuples of URL and a description or
+        #: :obj:`None`.
+        #: Extracted from the ``<link rel=attachment>`` elements in HTML
+        #: and written to the ``/EmbeddedFiles`` dictionary in PDF.
+        self.attachments = attachments or []
+
+
 class Document(object):
     """A rendered document, with access to individual pages
     ready to be painted on any cairo surfaces.
 
-    .. versionadded:: 0.15
-
-    Should be obtained from :meth:`HTML.render() <weasyprint.HTML.render>`
-    but not instantiated directly.
+    Typically obtained from :meth:`HTML.render() <weasyprint.HTML.render>`,
+    but can also be instantiated directly
+    with a list of :class:`pages <Page>`,
+    a set of :class:`metadata <DocumentMetadata>` and a ``url_fetcher``.
 
     """
     @classmethod
@@ -248,11 +316,19 @@ class Document(object):
             enable_hinting, style_for, get_image_from_uri,
             build_formatting_structure(
                 html.root_element, style_for, get_image_from_uri))
-        return cls([Page(p, enable_hinting) for p in page_boxes])
+        return cls([Page(p, enable_hinting) for p in page_boxes],
+                   DocumentMetadata(**html._get_metadata()), html.url_fetcher)
 
-    def __init__(self, pages):
+    def __init__(self, pages, metadata, url_fetcher):
         #: A list of :class:`Page` objects.
         self.pages = pages
+        #: A :class:`DocumentMetadata` object.
+        #: Contains information that does not belong to a specific page
+        #: but to the whole document.
+        self.metadata = metadata
+        #: A ``url_fetcher`` for resources that have to be read when writing
+        #: the output.
+        self.url_fetcher = url_fetcher
 
     def copy(self, pages='all'):
         """Take a subset of the pages.
@@ -262,22 +338,32 @@ class Document(object):
         :return:
             A new :class:`Document` object.
 
-        Examples::
+        Examples:
 
-            # Lists count from 0 but page numbers usually from 1
+        Write two PDF files for odd-numbered and even-numbered pages::
+
+            # Python lists count from 0 but pages are numbered from 1.
             # [::2] is a slice of even list indexes but odd-numbered pages.
             document.copy(document.pages[::2]).write_pdf('odd_pages.pdf')
             document.copy(document.pages[1::2]).write_pdf('even_pages.pdf')
 
+        Write each page to a numbred PNG file::
+
             for i, page in enumerate(document.pages):
                 document.copy(page).write_png('page_%s.png' % i)
+
+        Combine multiple documents into one PDF file,
+        using metadata from the first::
+
+            all_pages = [p for p in doc.pages for doc in documents]
+            documents[0].copy(all_pages).write_pdf('combined.pdf')
 
         """
         if pages == 'all':
             pages = self.pages
         elif not isinstance(pages, list):
             pages = list(pages)
-        return type(self)(pages)
+        return type(self)(pages, self.metadata, self.url_fetcher)
 
     def resolve_links(self):
         """Resolve internal hyperlinks.
@@ -304,7 +390,7 @@ class Document(object):
                 if link_type == 'internal':
                     target = anchors.get(anchor_name)
                     if target is None:
-                        LOGGER.warn(
+                        LOGGER.warning(
                             'No anchor #%s for internal URI reference '
                             'at line %s' % (anchor_name, link.sourceline))
                     else:
@@ -359,7 +445,7 @@ class Document(object):
                 last_by_depth.append(children)
         return root
 
-    def write_pdf(self, target=None, zoom=1):
+    def write_pdf(self, target=None, zoom=1, attachments=None):
         """Paint the pages in a PDF file, with meta-data.
 
         PDF files written directly by cairo do not have meta-data such as
@@ -375,6 +461,9 @@ class Document(object):
             For values other than 1, physical CSS units will thus be “wrong”.
             Page size declarations are affected too, even with keyword values
             like ``@page { size: A3 landscape; }``
+        :param attachments: A list of additional file attachments for the
+            generated PDF document or :obj:`None`. The list's elements are
+            :class:`Attachment` objects, filenames, URLs or file-like objects.
         :returns:
             The PDF as byte string if :obj:`target` is :obj:`None`, otherwise
             :obj:`None` (the PDF is written to :obj:`target`.)
@@ -394,7 +483,8 @@ class Document(object):
             surface.show_page()
         surface.finish()
 
-        write_pdf_metadata(self, file_obj, scale)
+        write_pdf_metadata(self, file_obj, scale, self.metadata, attachments,
+                           self.url_fetcher)
 
         if target is None:
             return file_obj.getvalue()

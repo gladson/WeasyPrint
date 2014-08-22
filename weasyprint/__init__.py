@@ -8,7 +8,7 @@
     The public API is what is accessible from this "root" packages
     without importing sub-modules.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -16,20 +16,22 @@
 from __future__ import division, unicode_literals
 
 
-VERSION = '0.17'
+VERSION = '0.22'
 __version__ = VERSION
 
 # Used for 'User-Agent' in HTTP and 'Creator' in PDF
 VERSION_STRING = 'WeasyPrint %s (http://weasyprint.org/)' % VERSION
 
-__all__ = ['HTML', 'CSS', 'Document', 'Page', 'default_url_fetcher',
-           'VERSION']
+__all__ = ['HTML', 'CSS', 'Attachment', 'Document', 'Page',
+           'default_url_fetcher', 'VERSION']
 
 
-import lxml.etree
+import contextlib
+import html5lib
 
-from .urls import (default_url_fetcher, wrap_url_fetcher,
-                   path2url, ensure_url, url_is_absolute)
+from .urls import (fetch, default_url_fetcher, path2url, ensure_url,
+                   url_is_absolute)
+from .compat import unicode
 from .logger import LOGGER
 # Some import are at the end of the file (after the CSS class) is defined
 # to work around circular imports.
@@ -73,25 +75,21 @@ class HTML(object):
     def __init__(self, guess=None, filename=None, url=None, file_obj=None,
                  string=None, tree=None, encoding=None, base_url=None,
                  url_fetcher=default_url_fetcher, media_type='print'):
-        url_fetcher = wrap_url_fetcher(url_fetcher)
-
-        source_type, source, base_url, protocol_encoding = _select_source(
+        result = _select_source(
             guess, filename, url, file_obj, string, tree, base_url,
             url_fetcher)
-
-        if source_type == 'tree':
-            result = source
-        else:
-            if source_type == 'string':
-                parse = lxml.etree.fromstring
+        with result as (source_type, source, base_url, protocol_encoding):
+            if source_type == 'tree':
+                result = source
             else:
-                parse = lxml.etree.parse
-            if not encoding:
-                encoding = protocol_encoding
-            parser = lxml.etree.HTMLParser(encoding=encoding)
-            result = parse(source, parser=parser)
-            if result is None:
-                raise ValueError('Error while parsing HTML')
+                if not encoding:
+                    encoding = protocol_encoding
+                if isinstance(source, unicode):
+                    encoding = None
+                result = html5lib.parse(
+                    source, treebuilder='lxml', encoding=encoding,
+                    namespaceHTMLElements=False)
+                assert result
         base_url = find_base_url(result, base_url)
         if hasattr(result, 'getroot'):
             result.docinfo.URL = base_url
@@ -105,6 +103,9 @@ class HTML(object):
 
     def _ua_stylesheets(self):
         return [HTML5_UA_STYLESHEET]
+
+    def _get_metadata(self):
+        return get_html_metadata(self.root_element)
 
     def render(self, stylesheets=None, enable_hinting=False):
         """Lay out and paginate the document, but do not (yet) export it
@@ -130,7 +131,8 @@ class HTML(object):
         """
         return Document._render(self, stylesheets, enable_hinting)
 
-    def write_pdf(self, target=None, stylesheets=None, zoom=1):
+    def write_pdf(self, target=None, stylesheets=None, zoom=1,
+                  attachments=None):
         """Render the document to a PDF file.
 
         This is a shortcut for calling :meth:`render`, then
@@ -150,13 +152,16 @@ class HTML(object):
             For values other than 1, physical CSS units will thus be “wrong”.
             Page size declarations are affected too, even with keyword values
             like ``@page { size: A3 landscape; }``
+        :param attachments: A list of additional file attachments for the
+            generated PDF document or :obj:`None`. The list's elements are
+            :class:`Attachment` objects, filenames, URLs or file-like objects.
         :returns:
             The PDF as byte string if :obj:`target` is not provided or
             :obj:`None`, otherwise :obj:`None` (the PDF is written to
             :obj:`target`.)
 
         """
-        return self.render(stylesheets).write_pdf(target, zoom)
+        return self.render(stylesheets).write_pdf(target, zoom, attachments)
 
     def write_image_surface(self, stylesheets=None, resolution=96):
         surface, _width, _height = (
@@ -211,34 +216,50 @@ class CSS(object):
                  string=None, encoding=None, base_url=None,
                  url_fetcher=default_url_fetcher, _check_mime_type=False,
                  media_type='print'):
-        url_fetcher = wrap_url_fetcher(url_fetcher)
-
-        source_type, source, base_url, protocol_encoding = _select_source(
+        result = _select_source(
             guess, filename, url, file_obj, string, tree=None,
             base_url=base_url, url_fetcher=url_fetcher,
             check_css_mime_type=_check_mime_type,)
-
-        kwargs = dict(linking_encoding=encoding,
-                      protocol_encoding=protocol_encoding)
-        if source_type == 'string':
-            if isinstance(source, bytes):
-                method = 'parse_stylesheet_bytes'
-            else:
+        with result as (source_type, source, base_url, protocol_encoding):
+            if source_type == 'string' and not isinstance(source, bytes):
                 # unicode, no encoding
-                method = 'parse_stylesheet'
-                kwargs.clear()
-        else:
-            # file_obj or filename
-            method = 'parse_stylesheet_file'
-        # TODO: do not keep this?
-        self.stylesheet = getattr(PARSER, method)(source, **kwargs)
+                stylesheet = PARSER.parse_stylesheet(source)
+            else:
+                if source_type == 'file_obj':
+                    source = source.read()
+                stylesheet = PARSER.parse_stylesheet_bytes(
+                    source, linking_encoding=encoding,
+                    protocol_encoding=protocol_encoding)
         self.base_url = base_url
         self.rules = list(preprocess_stylesheet(
-            media_type, base_url, self.stylesheet.rules, url_fetcher))
+            media_type, base_url, stylesheet.rules, url_fetcher))
+        # TODO: do not keep this self.stylesheet around?
+        self.stylesheet = stylesheet
         for error in self.stylesheet.errors:
-            LOGGER.warn(error)
+            LOGGER.warning(error)
 
 
+class Attachment(object):
+    """Represents a file attachment for a PDF document.
+
+    An instance is created in the same way as :class:`HTML`, except that
+    the HTML specific parameters are not supported. An optional description can
+    be provided with the ``description`` parameter.
+
+    :param description: A description of the attachment to be included in the
+        PDF document. May be :obj:`None`
+
+    """
+    def __init__(self, guess=None, filename=None, url=None, file_obj=None,
+                 string=None, base_url=None, url_fetcher=default_url_fetcher,
+                 description=None):
+        self.source = _select_source(
+            guess, filename, url, file_obj, string, tree=None,
+            base_url=base_url, url_fetcher=url_fetcher)
+        self.description = description
+
+
+@contextlib.contextmanager
 def _select_source(guess=None, filename=None, url=None, file_obj=None,
                    string=None, tree=None, base_url=None,
                    url_fetcher=default_url_fetcher, check_css_mime_type=False):
@@ -259,48 +280,59 @@ def _select_source(guess=None, filename=None, url=None, file_obj=None,
             type_ = 'url'
         else:
             type_ = 'filename'
-        return _select_source(
+        result = _select_source(
             base_url=base_url, url_fetcher=url_fetcher,
             check_css_mime_type=check_css_mime_type,
-            **{type_: guess})
-    if nones == [True, False, True, True, True, True]:
+            # Use str() to work around http://bugs.python.org/issue4978
+            # See https://github.com/Kozea/WeasyPrint/issues/97
+            **{str(type_): guess})
+        with result as result:
+            yield result
+    elif nones == [True, False, True, True, True, True]:
         if base_url is None:
             base_url = path2url(filename)
-        return 'filename', filename, base_url, None
-    if nones == [True, True, False, True, True, True]:
-        result = url_fetcher(url)
-        if check_css_mime_type and result['mime_type'] != 'text/css':
-            LOGGER.warn(
-                'Unsupported stylesheet type %s for %s',
-                result['mime_type'], result['redirected_url'])
-            return 'string', '', base_url, None
-        protocol_encoding = result.get('encoding')
-        if base_url is None:
-            base_url = result.get('redirected_url', url)
-        if 'string' in result:
-            return 'string', result['string'], base_url, protocol_encoding
-        else:
-            return 'file_obj', result['file_obj'], base_url, protocol_encoding
-    if nones == [True, True, True, False, True, True]:
+        with open(filename, 'rb') as file_obj:
+            yield 'file_obj', file_obj, base_url, None
+    elif nones == [True, True, False, True, True, True]:
+        with fetch(url_fetcher, url) as result:
+            if check_css_mime_type and result['mime_type'] != 'text/css':
+                LOGGER.warning(
+                    'Unsupported stylesheet type %s for %s',
+                    result['mime_type'], result['redirected_url'])
+                yield 'string', '', base_url, None
+            else:
+                proto_encoding = result.get('encoding')
+                if base_url is None:
+                    base_url = result.get('redirected_url', url)
+                if 'string' in result:
+                    yield 'string', result['string'], base_url, proto_encoding
+                else:
+                    yield (
+                        'file_obj', result['file_obj'], base_url,
+                        proto_encoding)
+    elif nones == [True, True, True, False, True, True]:
         if base_url is None:
             # filesystem file-like objects have a 'name' attribute.
             name = getattr(file_obj, 'name', None)
             # Some streams have a .name like '<stdin>', not a filename.
             if name and not name.startswith('<'):
                 base_url = ensure_url(name)
-        return 'file_obj', file_obj, base_url, None
-    if nones == [True, True, True, True, False, True]:
-        return 'string', string, base_url, None
-    if nones == [True, True, True, True, True, False]:
-        return 'tree', tree, base_url, None
-
-    raise TypeError('Expected exactly one source, got ' + (
-        ', '.join(name for i, name in enumerate(
-            'guess filename url file_obj string tree'.split()) if not nones[i]
-        ) or 'nothing'))
+        yield 'file_obj', file_obj, base_url, None
+    elif nones == [True, True, True, True, False, True]:
+        yield 'string', string, base_url, None
+    elif nones == [True, True, True, True, True, False]:
+        yield 'tree', tree, base_url, None
+    else:
+        raise TypeError('Expected exactly one source, got ' + (
+            ', '.join(
+                name for i, name in enumerate(
+                    'guess filename url file_obj string tree'.split())
+                if not nones[i]
+            ) or 'nothing'
+        ))
 
 
 # Work around circular imports.
 from .css import PARSER, preprocess_stylesheet
-from .html import find_base_url, HTML5_UA_STYLESHEET
+from .html import find_base_url, HTML5_UA_STYLESHEET, get_html_metadata
 from .document import Document, Page

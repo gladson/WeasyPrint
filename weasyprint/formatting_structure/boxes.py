@@ -52,7 +52,7 @@
 
     See respective docstrings for details.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -191,8 +191,81 @@ class Box(object):
         """Return the (x, y, w, h) rectangle where the box is clickable."""
         # "Border area. That's the area that hit-testing is done on."
         # http://lists.w3.org/Archives/Public/www-style/2012Jun/0318.html
+        # TODO: manage the border radii, use outer_border_radii instead
         return (self.border_box_x(), self.border_box_y(),
                 self.border_width(), self.border_height())
+
+    def rounded_box(self, bt, br, bb, bl):
+        """Position, size and radii of a box inside the outer border box.
+
+        bt, br, bb, and bl are distances from the outer border box,
+        defining a rectangle to be rounded.
+
+        """
+        tlrx, tlry = self.border_top_left_radius
+        trrx, trry = self.border_top_right_radius
+        brrx, brry = self.border_bottom_right_radius
+        blrx, blry = self.border_bottom_left_radius
+
+        tlrx = max(0, tlrx - bl)
+        tlry = max(0, tlry - bt)
+        trrx = max(0, trrx - br)
+        trry = max(0, trry - bt)
+        brrx = max(0, brrx - br)
+        brry = max(0, brry - bb)
+        blrx = max(0, blrx - bl)
+        blry = max(0, blry - bb)
+
+        x = self.border_box_x() + bl
+        y = self.border_box_y() + bt
+        width = self.border_width() - bl - br
+        height = self.border_height() - bt - bb
+
+        # Fix overlapping curves
+        # See http://www.w3.org/TR/css3-background/#corner-overlap
+        ratio = min([1] + [
+            extent / sum_radii
+            for extent, sum_radii in [
+                (width, tlrx + trrx),
+                (width, blrx + brrx),
+                (height, tlry + blry),
+                (height, trry + brry),
+            ]
+            if sum_radii > 0
+        ])
+        return (
+            x, y, width, height,
+            (tlrx * ratio, tlry * ratio),
+            (trrx * ratio, trry * ratio),
+            (brrx * ratio, brry * ratio),
+            (blrx * ratio, blry * ratio))
+
+    def rounded_box_ratio(self, ratio):
+        return self.rounded_box(
+            self.border_top_width * ratio,
+            self.border_right_width * ratio,
+            self.border_bottom_width * ratio,
+            self.border_left_width * ratio)
+
+    def rounded_padding_box(self):
+        """Return the position, size and radii of the rounded padding box."""
+        return self.rounded_box(
+            self.border_top_width,
+            self.border_right_width,
+            self.border_bottom_width,
+            self.border_left_width)
+
+    def rounded_border_box(self):
+        """Return the position, size and radii of the rounded border box."""
+        return self.rounded_box(0, 0, 0, 0)
+
+    def rounded_content_box(self):
+        """Return the position, size and radii of the rounded content box."""
+        return self.rounded_box(
+            self.border_top_width + self.padding_top,
+            self.border_right_width + self.padding_right,
+            self.border_bottom_width + self.padding_bottom,
+            self.border_left_width + self.padding_left)
 
     # Positioning schemes
 
@@ -451,6 +524,11 @@ class TableBox(BlockLevelBox, ParentBox):
     def all_children(self):
         return itertools.chain(self.children, self.column_groups)
 
+    def translate(self, dx=0, dy=0):
+        self.column_positions = [
+            position + dx for position in self.column_positions]
+        return super(TableBox, self).translate(dx, dy)
+
 
 class InlineTableBox(TableBox):
     """Box for elements with ``display: inline-table``"""
@@ -545,7 +623,6 @@ class PageBox(ParentBox):
     def __init__(self, page_type, style):
         self.page_type = page_type
         # Page boxes are not linked to any element.
-        self.fixed_boxes = []
         super(PageBox, self).__init__(
             element_tag=None, sourceline=None, style=style, children=[])
 

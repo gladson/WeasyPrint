@@ -5,7 +5,7 @@
 
     Various data about known properties.
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -21,14 +21,15 @@ Dimension = collections.namedtuple('Dimension', ['value', 'unit'])
 
 # See http://www.w3.org/TR/CSS21/propidx.html
 INITIAL_VALUES = {
-    'background_attachment': 'scroll',
+    'background_attachment': ['scroll'],
     'background_color': COLOR_KEYWORDS['transparent'],
-    'background_image': 'none',
-    'background_position': (Dimension(0, '%'), Dimension(0, '%')),
-    'background_repeat': 'repeat',
-    'background_clip': 'border-box',  # CSS3
-    'background_origin': 'padding-box',  # CSS3
-    'background_size': ('auto', 'auto'),  # CSS3
+    'background_image': [('none', None)],
+    'background_position': [('left', Dimension(0, '%'),
+                             'top', Dimension(0, '%'))],
+    'background_repeat': [('repeat', 'repeat')],
+    'background_clip': ['border-box'],  # CSS3
+    'background_origin': ['padding-box'],  # CSS3
+    'background_size': [('auto', 'auto')],  # CSS3
     'border_collapse': 'separate',
     # http://www.w3.org/TR/css3-color/#currentcolor
     'border_top_color': 'currentColor',
@@ -55,12 +56,12 @@ INITIAL_VALUES = {
     # computed values (JavaScript?), this value should serialize to 'none'.
     'counter_increment': 'auto',
     'counter_reset': [],  # parsed value for 'none'
-#    'counter_set': [],  # parsed value for 'none'
+    # 'counter_set': [],  # parsed value for 'none'
     'direction': 'ltr',
     'display': 'inline',
     'empty_cells': 'show',
     'float': 'none',
-    'font_family': ['serif'], # depends on user agent
+    'font_family': ['serif'],  # depends on user agent
     'font_size': 16,  # Actually medium, but we define medium from this.
     'font_stretch': 'normal',  # css3-fonts
     'font_style': 'normal',
@@ -70,7 +71,7 @@ INITIAL_VALUES = {
     'left': 'auto',
     'letter_spacing': 'normal',
     'line_height': 'normal',
-    'list_style_image': 'none',
+    'list_style_image': ('none', None),
     'list_style_position': 'outside',
     'list_style_type': 'disc',
     'margin_top': Dimension(0, 'px'),
@@ -97,8 +98,9 @@ INITIAL_VALUES = {
     'position': 'static',
     'right': 'auto',
     'table_layout': 'auto',
-    'text_align': '-weasy-start',  # Taken from CSS3 Text.
-                   # The only other supported value form CSS3 is -weasy-end.
+    # Taken from CSS3 Text.
+    # The only other supported value form CSS3 is -weasy-end.
+    'text_align': '-weasy-start',
     'text_decoration': 'none',
     'text_indent': Dimension(0, 'px'),
     'text_transform': 'none',
@@ -117,6 +119,13 @@ INITIAL_VALUES = {
 
     # CSS3 User Interface: http://www.w3.org/TR/css3-ui/#box-sizing
     'box_sizing': 'content-box',
+    'overflow_wrap': 'normal',
+
+    # CSS3 Backgrounds and Borders: http://www.w3.org/TR/css3-background/
+    'border_top_left_radius': (Dimension(0, 'px'), Dimension(0, 'px')),
+    'border_top_right_radius': (Dimension(0, 'px'), Dimension(0, 'px')),
+    'border_bottom_left_radius': (Dimension(0, 'px'), Dimension(0, 'px')),
+    'border_bottom_right_radius': (Dimension(0, 'px'), Dimension(0, 'px')),
 
     # CSS3 Color: http://www.w3.org/TR/css3-color/#transparency
     'opacity': 1,
@@ -129,6 +138,9 @@ INITIAL_VALUES = {
     # http://www.w3.org/TR/SVG/painting.html#ImageRenderingProperty
     'image_rendering': 'auto',
 
+    # http://www.w3.org/TR/css3-images/#the-image-resolution
+    'image_resolution': 1,  # dppx
+
     # Proprietary
     'anchor': None,  # computed value of 'none'
     'link': None,  # computed value of 'none'
@@ -139,9 +151,12 @@ INITIAL_VALUES = {
     'bookmark_label': ('keyword', 'none'),  # computed value of 'none'
     'bookmark_level': 'none',
 
-    # CSS3 Text
-    # http://www.w3.org/TR/css3-text/#hyphenation
+    # CSS4 Text
+    # http://dev.w3.org/csswg/css4-text/#hyphenation
     'hyphens': 'manual',
+    'hyphenate_character': '‐',
+    'hyphenate_limit_chars': (5, 2, 2),
+    'hyphenate_limit_zone': Dimension(0, 'px'),
 
     # Internal, to implement the "static position" for absolute boxes.
     '_weasy_specified_display': 'inline',
@@ -205,6 +220,7 @@ INHERITED = set("""
     list_style_position
     list_style_type
     orphans
+    overflow_wrap
     quotes
     text_align
     text_decoration
@@ -216,7 +232,11 @@ INHERITED = set("""
     word_spacing
 
     hyphens
+    hyphenate_character
+    hyphenate_limit_chars
+    hyphenate_limit_zone
     image_rendering
+    image_resolution
     lang
     link
 """.split())

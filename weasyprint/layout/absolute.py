@@ -3,7 +3,7 @@
     weasyprint.absolute
     -------------------
 
-    :copyright: Copyright 2011-2012 Simon Sapin and contributors, see AUTHORS.
+    :copyright: Copyright 2011-2014 Simon Sapin and contributors, see AUTHORS.
     :license: BSD, see LICENSE for details.
 
 """
@@ -49,6 +49,9 @@ class AbsolutePlaceholder(object):
 
     def __setattr__(self, name, value):
         setattr(self._box, name, value)
+
+    def __repr__(self):
+        return '<Placeholder %r>' % self._box
 
 
 @handle_min_max_width
@@ -229,8 +232,13 @@ def absolute_block(context, box, containing_block, fixed_boxes):
 
 def absolute_layout(context, placeholder, containing_block, fixed_boxes):
     """Set the width of absolute positioned ``box``."""
+    assert not placeholder._layout_done
     box = placeholder._box
+    placeholder.set_laid_out_box(
+        absolute_box_layout(context, box, containing_block, fixed_boxes))
 
+
+def absolute_box_layout(context, box, containing_block, fixed_boxes):
     cb = containing_block
     # TODO: handle inline boxes (point 10.1.4.1)
     # http://www.w3.org/TR/CSS2/visudet.html#containing-block-details
@@ -257,8 +265,7 @@ def absolute_layout(context, placeholder, containing_block, fixed_boxes):
         assert isinstance(box, boxes.BlockReplacedBox)
         new_box = absolute_replaced(context, box, containing_block)
     context.finish_block_formatting_context(new_box)
-
-    placeholder.set_laid_out_box(new_box)
+    return new_box
 
 
 def absolute_replaced(context, box, containing_block):
@@ -283,9 +290,9 @@ def absolute_replaced(context, box, containing_block):
             box.margin_right = 0
         remaining = cb_width - box.margin_width()
         if box.left == 'auto':
-            box.left = remaining
+            box.left = remaining - box.right
         if box.right == 'auto':
-            box.right = remaining
+            box.right = remaining - box.left
     elif 'auto' in (box.margin_left, box.margin_right):
         remaining = cb_width - (box.border_width() + box.left + box.right)
         if box.margin_left == box.margin_right == 'auto':
@@ -307,7 +314,6 @@ def absolute_replaced(context, box, containing_block):
             box.right = cb_width - (box.margin_width() + box.left)
         else:
             box.left = cb_width - (box.margin_width() + box.right)
-
 
     # http://www.w3.org/TR/CSS21/visudet.html#abs-replaced-height
     if box.top == box.bottom == 'auto':
